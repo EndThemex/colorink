@@ -1,0 +1,320 @@
+// InkSight — LAN picture-frame firmware
+// Boot: load saved WiFi -> start LAN web service (http://inksight.local)
+//       -> show last displayed image from the on-device gallery.
+// Web:  upload 2bpp (BWRY) framebuffers from the browser, list / display / delete.
+// Button: short press = next image, long press (2s) = provisioning portal.
+// No cloud services: all previous remote API / OTA / AI-voice code removed.
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include "esp_adc_cal.h"
+
+#include "config.h"
+#include "storage.h"
+#include "portal.h"
+#include "webapp.h"
+#include "gallery.h"
+#include "epd_driver.h"
+#include "display.h"
+
+// ── Shared framebuffers (referenced by other modules via extern) ──
+uint8_t imgBuf[IMG_BUF_LEN];
+#if EPD_BPP >= 2
+uint8_t *colorBuf = nullptr;
+bool useColorBuf = false;
+
+bool ensureColorBuf() {
+    if (colorBuf) return true;
+    colorBuf = (uint8_t *)malloc(COLOR_BUF_LEN);
+    if (!colorBuf) {
+        Serial.println("[MEM] colorBuf alloc failed");
+        return false;
+    }
+    Serial.printf("[MEM] colorBuf allocated %d bytes on heap\n", COLOR_BUF_LEN);
+    return true;
+}
+
+void freeColorBuf() {
+    if (colorBuf) {
+        free(colorBuf);
+        colorBuf = nullptr;
+        Serial.println("[MEM] colorBuf freed");
+    }
+}
+#endif
+
+// ── Network service pump ────────────────────────────────────
+// 一次墨水屏刷新要阻塞 ~15s。这段时间里持续泵一次网络服务，
+// 浏览器/配网页才不会"连上了但半天打不开"。
+bool netPumpBlocked = false;
+
+void netServicePump()
+{
+    if (netPumpBlocked)
+        return; // 正在请求处理函数内部刷新，不能重入 HTTP
+    if (portalActive)
+        handlePortalClients();
+    else if (webappRunning())
+        webappHandle();
+}
+
+// ── Battery voltage ─────────────────────────────────────────
+
+float readBatteryVoltage() {
+    const int SAMPLES = 16;
+    const int DISCARD = 2;  // Discard highest and lowest outliers
+    int readings[SAMPLES];
+
+    for (int i = 0; i < SAMPLES; i++) {
+        readings[i] = analogRead(PIN_BAT_ADC);
+        delayMicroseconds(100);
+    }
+
+    // Sort for outlier removal
+    for (int i = 0; i < SAMPLES - 1; i++)
+        for (int j = i + 1; j < SAMPLES; j++)
+            if (readings[i] > readings[j]) {
+                int tmp = readings[i];
+                readings[i] = readings[j];
+                readings[j] = tmp;
+            }
+
+    // Average middle readings
+    long sum = 0;
+    for (int i = DISCARD; i < SAMPLES - DISCARD; i++)
+        sum += readings[i];
+
+    float avgRaw = (float)sum / (SAMPLES - 2 * DISCARD);
+#if defined(BOARD_PROFILE_ESP32_C3_WROOM02) || defined(BOARD_PROFILE_SMT_WROOM32E)
+    static esp_adc_cal_characteristics_t adcChars;
+    static bool calibrated = false;
+    if (!calibrated) {
+        esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adcChars);
+        calibrated = true;
+    }
+    uint32_t mv = esp_adc_cal_raw_to_voltage((uint32_t)avgRaw, &adcChars);
+    float realBatteryVoltage = (mv / 1000.0f) * 2.0f; // R1=10k, R2=10k
+#else
+    float realBatteryVoltage = avgRaw * (3.3f / 4095.0f) * 2.0f;
+#endif
+    Serial.printf("[BAT] raw=%.1f vbat=%.2fV\n", avgRaw, realBatteryVoltage);
+    return realBatteryVoltage;
+}
+
+// ── LED feedback ────────────────────────────────────────────
+
+static void ledInit() {
+#if PIN_LED >= 0
+    pinMode(PIN_LED, OUTPUT);
+    digitalWrite(PIN_LED, LOW);
+#endif
+#if PIN_RGB_LED >= 0
+    neopixelWrite(PIN_RGB_LED, 0, 0, 0);
+#endif
+}
+
+static void ledFeedback(const char *pattern) {
+#if PIN_LED < 0
+    (void)pattern;
+    return;
+#else
+    if (strcmp(pattern, "portal") == 0) {
+        digitalWrite(PIN_LED, HIGH);  // solid while portal is open
+    } else if (strcmp(pattern, "off") == 0) {
+        digitalWrite(PIN_LED, LOW);
+    } else if (strcmp(pattern, "ack") == 0) {
+        for (int i = 0; i < 2; i++) {
+            digitalWrite(PIN_LED, HIGH); delay(80);
+            digitalWrite(PIN_LED, LOW);  delay(80);
+        }
+    }
+#endif
+}
+
+// ── Portal mode ─────────────────────────────────────────────
+
+enum class PortalEntryReason : uint8_t {
+    MANUAL,
+    AUTO_WIFI_FAILURE,
+};
+
+static unsigned long portalStartedAt = 0;
+static unsigned long portalTimeoutMs = 0;
+
+static void enterPortalMode(PortalEntryReason reason) {
+    unsigned long t0 = millis();
+
+    // AP 名必须在关 WiFi / 切模式之前取（旧版能用的配网就是这个顺序），
+    // 并且只算一次：热点 SSID 和屏幕上显示的名字必须完全一致。
+    String mac = WiFi.macAddress();
+    String apName = "InkSight-" + mac.substring(mac.length() - 5);
+    apName.replace(":", "");
+
+    webappStop();
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    delay(100);
+
+    ledFeedback("portal");
+    portalPreScan(); // 先扫描（热点还没起来，不会踢掉手机），配网页加载直接读缓存
+    startCaptivePortal(apName.c_str());
+    Serial.printf("[PORTAL] AP '%s' visible at t=%lums\n", apName.c_str(), millis() - t0);
+
+    // Portal 已在运行后才渲染配网屏；epdWaitBusy 会持续泵 portal，连接不受阻塞
+    showSetupScreen(apName.c_str());
+    freeColorBuf();  // 配网期间用不到帧缓冲，释放 105KB 堆给 lwIP（DNS/HTTP）
+
+    portalStartedAt = millis();
+    portalTimeoutMs = (reason == PortalEntryReason::AUTO_WIFI_FAILURE)
+        ? PORTAL_AUTO_TIMEOUT_MS
+        : PORTAL_MANUAL_TIMEOUT_MS;
+    Serial.printf("[PORTAL] %s portal timeout: %lus\n",
+                  reason == PortalEntryReason::AUTO_WIFI_FAILURE ? "Auto" : "Manual",
+                  portalTimeoutMs / 1000UL);
+}
+
+static void checkPortalTimeout() {
+    if (portalStartedAt == 0) return;
+    if (WiFi.softAPgetStationNum() > 0)
+    {
+        // 有设备连着热点：暂停超时，避免配网中途被重启踢掉
+        portalStartedAt = millis();
+        return;
+    }
+    if (millis() - portalStartedAt < portalTimeoutMs) return;
+    Serial.println("[PORTAL] timeout, restarting...");
+    delay(200);
+    ESP.restart();
+}
+
+// ── WiFi watchdog (server mode) ─────────────────────────────
+
+static unsigned long wifiDownSince = 0;
+static unsigned long lastReconnectAttempt = 0;
+static int reconnectFails = 0;
+
+static void handleWiFiWatchdog() {
+    if (WiFi.status() == WL_CONNECTED) {
+        wifiDownSince = 0;
+        reconnectFails = 0;
+        return;
+    }
+    if (wifiDownSince == 0) wifiDownSince = millis();
+    if (millis() - lastReconnectAttempt < (unsigned long)LIVE_WIFI_RETRY_MS) return;
+    lastReconnectAttempt = millis();
+    Serial.println("[NET] WiFi lost, reconnecting...");
+    // 运行中掉线多数是短暂抖动：用更短的预算快速试，试不通就早点开配网热点，
+    // 别让"路由器关机了"这种情况把 AP 拖到几分钟后才出现。
+    if (connectWiFiSTA(6000, 9000))
+    {
+        Serial.printf("[NET] reconnected  IP=%s\n", WiFi.localIP().toString().c_str());
+        wifiDownSince = 0;
+    }
+    else if (++reconnectFails >= 3)
+    {
+        Serial.println("[NET] reconnect failed 3 times, entering portal");
+        enterPortalMode(PortalEntryReason::AUTO_WIFI_FAILURE);
+    }
+}
+
+// ── Button ──────────────────────────────────────────────────
+
+static void handleButton() {
+    static bool pressed = false;
+    static unsigned long pressStart = 0;
+
+    bool down = digitalRead(PIN_CFG_BTN) == LOW;
+    if (down && !pressed) {
+        pressed = true;
+        pressStart = millis();
+        return;
+    }
+    if (down && pressed) {
+        if (millis() - pressStart >= (unsigned long)CFG_BTN_HOLD_MS) {
+            pressed = false;
+            ledFeedback("off");
+            enterPortalMode(PortalEntryReason::MANUAL);
+        }
+        return;
+    }
+    if (!down && pressed) {
+        pressed = false;
+        unsigned long dur = millis() - pressStart;
+        if (dur >= (unsigned long)SHORT_PRESS_MIN_MS && dur < (unsigned long)CFG_BTN_HOLD_MS) {
+            if (galleryCount() > 0) {
+                galleryCycle(1);  // short press: next image (blocks ~15s)
+            } else {
+                ledFeedback("ack");
+            }
+        }
+    }
+}
+
+// ── Server mode ─────────────────────────────────────────────
+
+static void showLastImage() {
+    int id = galleryCurrentId();
+    if (id >= 0 && galleryExists(id)) {
+        galleryDisplayById(id);  // blocks ~15s, frees colorBuf when done
+        return;
+    }
+    if (galleryCount() > 0) {
+        galleryCycle(1);
+        return;
+    }
+    // Empty gallery: show a hint screen
+    String ip = WiFi.localIP().toString();
+    showDiagnostic(
+        "InkSight",
+        "http://inksight.local",
+        ip.c_str(),
+        "Open web page to upload"
+    );
+}
+
+void setup() {
+    unsigned long bootT0 = millis();
+    Serial.begin(115200);
+    delay(150);
+    Serial.printf("\n[BOOT] InkSight LAN gallery  %s %s\n", __DATE__, __TIME__);
+    Serial.printf("[BOOT] free heap: %u\n", (unsigned)ESP.getFreeHeap());
+
+    ledInit();
+    pinMode(PIN_CFG_BTN, INPUT_PULLUP);
+    gpioInit();
+
+    loadConfig();
+    galleryInit();
+    Serial.printf("[BOOT] storage ready t=%lums\n", millis() - bootT0);
+
+    bool btnHeld = digitalRead(PIN_CFG_BTN) == LOW;
+
+    if (!btnHeld && getWiFiCount() > 0) {
+        if (connectWiFiSTA()) {
+            Serial.printf("[BOOT] STA up t=%lums\n", millis() - bootT0);
+            webappStart();
+            showLastImage(); // ~15s 刷新，期间 netServicePump 继续服务网页
+            Serial.printf("[BOOT] ready t=%lums\n", millis() - bootT0);
+            ledFeedback("off");
+            return;
+        }
+        Serial.println("[NET] WiFi connect failed, entering portal");
+    } else if (btnHeld) {
+        Serial.println("[BOOT] button held at boot, entering portal");
+    } else {
+        Serial.println("[NET] no saved WiFi, entering portal");
+    }
+    enterPortalMode(btnHeld ? PortalEntryReason::MANUAL
+                            : PortalEntryReason::AUTO_WIFI_FAILURE);
+}
+
+void loop() {
+    if (portalActive) {
+        handlePortalClients();
+        checkPortalTimeout();
+        return;
+    }
+    webappHandle();
+    handleWiFiWatchdog();
+    handleButton();
+}
