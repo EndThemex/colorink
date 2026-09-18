@@ -257,7 +257,8 @@ void epdDisplay2bpp(const uint8_t *image2bpp)
 
         jdPowerOff();
         Serial.printf("[EPD] all done %lums\n", millis() - t0);
-        freeColorBuf();  // 刷完即释放 105KB，给 TLS/网络留堆；下次刷新自动重分配
+        // colorBuf 保持常驻（开机时预分配，见 main.cpp setup）：运行期重新
+        // malloc 105KB 连续内存在上传过图片后容易因堆碎片失败，导致刷新静默失败
         epdRendering = false;
         return;
     }

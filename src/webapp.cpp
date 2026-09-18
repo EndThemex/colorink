@@ -163,6 +163,11 @@ static void handleImagePost() {
     uploadErr = "";
 }
 
+// Pending panel operations: API handlers only validate + queue; the actual
+// ~15s refresh runs in loop() (webappProcessPending), never inside a handler.
+static volatile int pendingDisplayId = -1;
+static volatile bool pendingClear = false;
+
 static void handleDisplay() {
     if (!webServer.hasArg("id")) {
         sendError("缺少 id 参数");
@@ -175,16 +180,13 @@ static void handleDisplay() {
     }
     // A refresh may already be running (e.g. the boot-time repaint) — nesting
     // two panel refreshes would corrupt the panel state.
-    if (epdIsRendering()) {
+    if (epdIsRendering() || pendingDisplayId >= 0 || pendingClear) {
         sendError("屏幕正在刷新，请稍候再试");
         return;
     }
-    // Respond first — the panel refresh blocks for ~15s
+    pendingDisplayId = id;
+    Serial.printf("[WEB] display queued id=%d\n", id);
     sendJson(200, "{\"ok\":true,\"refreshing\":true,\"id\":" + String(id) + "}");
-    delay(150);
-    netPumpBlocked = true;   // we are inside a handler: no re-entrant HTTP
-    galleryDisplayById(id);
-    netPumpBlocked = false;
 }
 
 static void handleImageDelete() {
@@ -201,15 +203,30 @@ static void handleImageDelete() {
 }
 
 static void handleClear() {
-    if (epdIsRendering()) {
+    if (epdIsRendering() || pendingDisplayId >= 0 || pendingClear) {
         sendError("屏幕正在刷新，请稍候再试");
         return;
     }
+    pendingClear = true;
+    Serial.println("[WEB] clear queued");
     sendJson(200, "{\"ok\":true,\"refreshing\":true}");
-    delay(150);
-    netPumpBlocked = true;
-    galleryClearScreen();
-    netPumpBlocked = false;
+}
+
+void webappProcessPending() {
+    if (epdIsRendering()) return;  // a refresh (e.g. boot repaint) is still running
+    if (pendingClear) {
+        pendingClear = false;
+        galleryClearScreen();
+        Serial.println("[WEB] clear screen done");
+        return;  // one panel operation per loop pass
+    }
+    if (pendingDisplayId >= 0) {
+        int id = pendingDisplayId;
+        pendingDisplayId = -1;
+        // Blocks ~15s; epdWaitBusy keeps pumping the HTTP server meanwhile.
+        bool ok = galleryDisplayById(id);
+        Serial.printf("[WEB] display id=%d %s\n", id, ok ? "done" : "FAILED");
+    }
 }
 
 // ── Lifecycle ───────────────────────────────────────────────

@@ -17,10 +17,6 @@ bool connectWiFiSTA(unsigned long perNetTimeoutMs = WIFI_STA_ATTEMPT_MS,
 // answering while the panel refreshes (~15s).
 void netServicePump();
 
-// True while a request handler is itself performing a long EPD refresh.
-// netServicePump() must not re-enter the HTTP server then.
-extern bool netPumpBlocked;
-
 // Start the LAN web service (mDNS inksight.local + HTTP server on port 80).
 // Requires an active STA connection.
 void webappStart();
@@ -33,5 +29,10 @@ bool webappRunning();
 
 // Process pending HTTP requests (call in loop).
 void webappHandle();
+
+// Run panel refresh/clear operations queued by the API handlers (call in loop).
+// The ~15s refresh must never run inside an HTTP handler: executing it here
+// keeps request responses instant and lets the EPD waits keep serving the page.
+void webappProcessPending();
 
 #endif // INKSIGHT_WEBAPP_H

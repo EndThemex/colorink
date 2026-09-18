@@ -282,7 +282,7 @@ bool galleryDisplayById(int id) {
         return false;
     }
     Serial.printf("[GAL] displaying id=%d (%s)\n", id, path.c_str());
-    // epdDisplay2bpp blocks ~15s and frees colorBuf when done
+    // epdDisplay2bpp blocks ~15s; colorBuf stays allocated (pre-allocated at boot)
     epdDisplay2bpp(colorBuf);
     writeCurrentId(id);
     return true;

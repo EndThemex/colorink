@@ -1,7 +1,8 @@
-// InkSight — LAN picture-frame firmware
-// Boot: load saved WiFi -> start LAN web service (http://inksight.local)
-//       -> show last displayed image from the on-device gallery.
+// ColorInk — LAN picture-frame firmware
+// Boot: load saved WiFi -> start LAN web service (http://ColorInk.local).
+//       The panel is NOT repainted at boot; it keeps whatever it last showed.
 // Web:  upload 2bpp (BWRY) framebuffers from the browser, list / display / delete.
+//       The panel is repainted only on a web-page action (display / clear).
 // Button: short press = next image, long press (2s) = provisioning portal.
 // No cloud services: all previous remote API / OTA / AI-voice code removed.
 
@@ -15,7 +16,6 @@
 #include "webapp.h"
 #include "gallery.h"
 #include "epd_driver.h"
-#include "display.h"
 
 // ── Shared framebuffers (referenced by other modules via extern) ──
 uint8_t imgBuf[IMG_BUF_LEN];
@@ -46,12 +46,10 @@ void freeColorBuf() {
 // ── Network service pump ────────────────────────────────────
 // 一次墨水屏刷新要阻塞 ~15s。这段时间里持续泵一次网络服务，
 // 浏览器/配网页才不会"连上了但半天打不开"。
-bool netPumpBlocked = false;
-
+// 屏幕刷新只从 loop() 上下文发起（网页请求仅入队，见 webappProcessPending），
+// 不会在 HTTP handler 内部刷新，所以这里泵 handleClient 不会重入。
 void netServicePump()
 {
-    if (netPumpBlocked)
-        return; // 正在请求处理函数内部刷新，不能重入 HTTP
     if (portalActive)
         handlePortalClients();
     else if (webappRunning())
@@ -147,7 +145,7 @@ static void enterPortalMode(PortalEntryReason reason) {
     // AP 名必须在关 WiFi / 切模式之前取（旧版能用的配网就是这个顺序），
     // 并且只算一次：热点 SSID 和屏幕上显示的名字必须完全一致。
     String mac = WiFi.macAddress();
-    String apName = "InkSight-" + mac.substring(mac.length() - 5);
+    String apName = "ColorInk-" + mac.substring(mac.length() - 5);
     apName.replace(":", "");
 
     webappStop();
@@ -160,8 +158,7 @@ static void enterPortalMode(PortalEntryReason reason) {
     startCaptivePortal(apName.c_str());
     Serial.printf("[PORTAL] AP '%s' visible at t=%lums\n", apName.c_str(), millis() - t0);
 
-    // Portal 已在运行后才渲染配网屏；epdWaitBusy 会持续泵 portal，连接不受阻塞
-    showSetupScreen(apName.c_str());
+    // 屏幕只由网页控制：配网时也不刷屏，面板保留上一次的画面
     freeColorBuf();  // 配网期间用不到帧缓冲，释放 105KB 堆给 lwIP（DNS/HTTP）
 
     portalStartedAt = millis();
@@ -252,31 +249,11 @@ static void handleButton() {
 
 // ── Server mode ─────────────────────────────────────────────
 
-static void showLastImage() {
-    int id = galleryCurrentId();
-    if (id >= 0 && galleryExists(id)) {
-        galleryDisplayById(id);  // blocks ~15s, frees colorBuf when done
-        return;
-    }
-    if (galleryCount() > 0) {
-        galleryCycle(1);
-        return;
-    }
-    // Empty gallery: show a hint screen
-    String ip = WiFi.localIP().toString();
-    showDiagnostic(
-        "InkSight",
-        "http://inksight.local",
-        ip.c_str(),
-        "Open web page to upload"
-    );
-}
-
 void setup() {
     unsigned long bootT0 = millis();
     Serial.begin(115200);
     delay(150);
-    Serial.printf("\n[BOOT] InkSight LAN gallery  %s %s\n", __DATE__, __TIME__);
+    Serial.printf("\n[BOOT] ColorInk LAN gallery  %s %s\n", __DATE__, __TIME__);
     Serial.printf("[BOOT] free heap: %u\n", (unsigned)ESP.getFreeHeap());
 
     ledInit();
@@ -287,13 +264,17 @@ void setup() {
     galleryInit();
     Serial.printf("[BOOT] storage ready t=%lums\n", millis() - bootT0);
 
+    // 预分配 105KB 帧缓冲：此时 WiFi/lwIP 还没起，堆最宽裕，保证一次性拿到
+    // 连续内存。屏幕刷新后 colorBuf 常驻不再释放，运行期刷新不再依赖大块
+    // malloc（上传过图片后堆碎片化，运行期大分配可能失败 → 刷新静默失效）。
+    ensureColorBuf();
+
     bool btnHeld = digitalRead(PIN_CFG_BTN) == LOW;
 
     if (!btnHeld && getWiFiCount() > 0) {
         if (connectWiFiSTA()) {
             Serial.printf("[BOOT] STA up t=%lums\n", millis() - bootT0);
             webappStart();
-            showLastImage(); // ~15s 刷新，期间 netServicePump 继续服务网页
             Serial.printf("[BOOT] ready t=%lums\n", millis() - bootT0);
             ledFeedback("off");
             return;
@@ -315,6 +296,7 @@ void loop() {
         return;
     }
     webappHandle();
+    webappProcessPending(); // 执行网页排队的刷屏/清屏（~15s，期间泵 HTTP 服务）
     handleWiFiWatchdog();
     handleButton();
 }

@@ -6,7 +6,7 @@ const char WEBAPP_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>InkSight 局域网图库</title>
+<title>ColorInk 局域网图库</title>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{--bk:#1a1a1a;--gy:#777;--bg:#f2f2ec;--card:#fff;--bd:#d8d8d0;--acc:#1a1a1a;--red:#b4342e;--yl:#c9a800;--f:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif}
@@ -31,7 +31,7 @@ button.danger{background:#fff;color:var(--red);border-color:var(--red)}
 button.sm{padding:5px 12px;font-size:.82rem;border-radius:7px}
 #drop{border:2px dashed var(--bd);border-radius:12px;padding:26px 14px;text-align:center;color:var(--gy);font-size:.9rem;cursor:pointer;transition:.15s}
 #drop.hover{border-color:var(--bk);color:var(--bk);background:#f7f7f2}
-#preview{width:100%;border:1px solid var(--bd);border-radius:8px;background:#fff;image-rendering:pixelated;display:none;margin-top:12px}
+#preview{max-width:100%;max-height:65vh;border:1px solid var(--bd);border-radius:8px;background:#fff;image-rendering:pixelated;display:none;margin-top:12px}
 .legend{display:flex;gap:14px;font-size:.78rem;color:var(--gy);margin-top:8px;flex-wrap:wrap}
 .legend i{display:inline-block;width:11px;height:11px;border:1px solid #ccc;border-radius:3px;margin-right:4px;vertical-align:-1px}
 #imglist{list-style:none}
@@ -50,8 +50,8 @@ button.sm{padding:5px 12px;font-size:.82rem;border-radius:7px}
 </head>
 <body>
 <div class="wrap">
-  <h1>InkSight 局域网图库</h1>
-  <div class="sub">选择本地图片 → 浏览器转换为四色墨水屏数据 → 上传并在屏幕显示。也可用 <b id="mdns">http://inksight.local</b> 访问本页。</div>
+  <h1>ColorInk 图库</h1>
+  <div class="sub">选择本地图片 → 浏览器转换为四色墨水屏数据 → 上传并在屏幕显示。也可用 <b id="mdns">http://ColorInk.local</b> 访问本页。</div>
 
   <div class="grid">
     <!-- 转换与上传 -->
@@ -60,7 +60,7 @@ button.sm{padding:5px 12px;font-size:.82rem;border-radius:7px}
       <div id="drop">点击选择图片，或把图片拖到这里<br><span style="font-size:.78rem">支持 JPG / PNG / WebP，浏览器本地完成四色转换</span></div>
       <input type="file" id="file" accept="image/*" style="display:none">
 
-      <canvas id="preview" width="768" height="552"></canvas>
+      <canvas id="preview" width="552" height="768"></canvas>
 
       <div class="row">
         <label class="fl">旋转</label>
@@ -75,7 +75,15 @@ button.sm{padding:5px 12px;font-size:.82rem;border-radius:7px}
           <option value="cover">铺满（裁边）</option>
           <option value="contain">完整（留白）</option>
         </select>
-        <label class="fl"><input type="checkbox" id="dither" checked> 抖动</label>
+        <label class="fl">抖动</label>
+        <select id="dmode">
+          <option value="bayer">有序 Bayer（锐利）</option>
+          <option value="fs">扩散 FS（细腻）</option>
+          <option value="atkinson">Atkinson（高对比）</option>
+          <option value="none">无</option>
+        </select>
+        <label class="fl"><input type="checkbox" id="sharpen" checked> 锐化</label>
+        <label class="fl"><input type="checkbox" id="vivid" checked> 鲜艳</label>
       </div>
       <div class="row">
         <input type="text" id="iname" placeholder="图片名称（可选）" style="flex:1;min-width:160px">
@@ -87,7 +95,7 @@ button.sm{padding:5px 12px;font-size:.82rem;border-radius:7px}
         <span><i style="background:#fff"></i>白</span>
         <span><i style="background:#f0d600"></i>黄</span>
         <span><i style="background:#be201c"></i>红</span>
-        <span>768 × 552 · 四色 2bpp</span>
+        <span>552 × 768 · 四色 2bpp · 竖屏</span>
       </div>
     </div>
 
@@ -109,7 +117,10 @@ button.sm{padding:5px 12px;font-size:.82rem;border-radius:7px}
 
 <script>
 "use strict";
-const SW = 768, SH = 552;
+// 屏幕物理方向为竖屏：面板 552 列（横向）× 768 行（纵向）。
+// 控制器按"552 行 × 每行 768 像素"扫描，即帧缓冲里一"行"对应屏幕的竖直方向。
+// 因此画布用 552×768 竖屏排版，打包时转置写入设备帧缓冲。
+const SW = 552, SH = 768;
 const PALETTE = [
   {rgb:[0,0,0],       code:0},  // 黑 00
   {rgb:[255,255,255], code:1},  // 白 01
@@ -127,22 +138,40 @@ function toast(msg, ms=2600){
 }
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
-// ── 缩放绘制：把原图按旋转/填充模式放进 768x552 画布 ──
+// ── 缩放绘制：把原图按旋转/填充模式放进 552×768 竖屏画布 ──
+// 高质量降采样（参考 pica 的思路）：先分步减半（每步 ≤2×，浏览器高质量
+// 重采样），避免几千像素的原图一步缩到 552 宽导致细节丢失、整体发糊。
 function drawToWork(img){
   const rot = +$('rot').value, fit = $('fit').value;
   const work = document.createElement('canvas'); work.width=SW; work.height=SH;
   const wc = work.getContext('2d');
+  wc.imageSmoothingEnabled = true; wc.imageSmoothingQuality = 'high';
   wc.fillStyle = '#ffffff'; wc.fillRect(0,0,SW,SH);
 
   const landscape = (rot===0 || rot===180);
   const tw = landscape ? SW : SH, th = landscape ? SH : SW;   // 中间画布尺寸
+
+  // 先算最终绘制尺寸（分步减半不改变它），再据此决定减半到哪一步
+  let src = img, cw = img.width, ch = img.height;
+  const s0 = fit==='cover' ? Math.max(tw/cw, th/ch) : Math.min(tw/cw, th/ch);
+  const dw0 = cw*s0, dh0 = ch*s0;
+  while ((cw>>1) >= dw0 && (ch>>1) >= dh0) {
+    const nc = document.createElement('canvas');
+    nc.width = Math.max(1, cw>>1); nc.height = Math.max(1, ch>>1);
+    const ncx = nc.getContext('2d');
+    ncx.imageSmoothingEnabled = true; ncx.imageSmoothingQuality = 'high';
+    ncx.drawImage(src, 0, 0, nc.width, nc.height);
+    src = nc; cw = nc.width; ch = nc.height;
+  }
+
   const tmp = document.createElement('canvas'); tmp.width=tw; tmp.height=th;
   const tc = tmp.getContext('2d');
+  tc.imageSmoothingEnabled = true; tc.imageSmoothingQuality = 'high';
   tc.fillStyle = '#ffffff'; tc.fillRect(0,0,tw,th);
-  const s = fit==='cover' ? Math.max(tw/img.width, th/img.height)
-                          : Math.min(tw/img.width, th/img.height);
-  const dw = img.width*s, dh = img.height*s;
-  tc.drawImage(img, (tw-dw)/2, (th-dh)/2, dw, dh);
+  const s = fit==='cover' ? Math.max(tw/cw, th/ch)
+                          : Math.min(tw/cw, th/ch);
+  const dw = cw*s, dh = ch*s;
+  tc.drawImage(src, (tw-dw)/2, (th-dh)/2, dw, dh);
 
   wc.save();
   if (rot===0){ wc.drawImage(tmp,0,0); }
@@ -153,15 +182,65 @@ function drawToWork(img){
   return work;
 }
 
-// ── 四色量化（可选 Floyd-Steinberg 抖动）→ 2bpp 打包 ──
+// ── 前处理 + 四色量化 → 2bpp 打包 ──
+// 抖动方案参考开源实践：
+//  - esp_epaper 组件：BWRY 四色面板推荐 ordered（Bayer）抖动，纹理规律、边缘锐利；
+//  - epaper-dithering：Atkinson 只扩散 6/8 误差，对比更强，适合低色数墨水屏；
+//    误差扩散配合蛇形（serpentine）扫描可消除 Floyd-Steinberg 常见的方向性条纹；
+//  - 鲜艳化：墨水屏实测显色比理论 RGB 暗很多（esp32-photoframe MEASURED_PALETTE），
+//    提饱和度/对比度后再映射四色，观感更接近原图。
+const BAYER8 = [
+  [ 0,32, 8,40, 2,34,10,42],
+  [48,16,56,24,50,18,58,26],
+  [12,44, 4,36,14,46, 6,38],
+  [60,28,52,20,62,30,54,22],
+  [ 3,35,11,43, 1,33, 9,41],
+  [51,19,59,27,49,17,57,25],
+  [15,47, 7,39,13,45, 5,37],
+  [63,31,55,23,61,29,53,21],
+];
+const ATK = [[1,0,1/8],[2,0,1/8],[-1,1,1/8],[0,1,1/8],[1,1,1/8],[2,1,1/8]];
+const FSK = [[1,0,7/16],[-1,1,3/16],[0,1,5/16],[1,1,1/16]];
+
+// 鲜艳化：饱和度 ×1.25 + 对比度 ×1.1（Uint8ClampedArray 写入自动钳位）
+function enhance(px){
+  const sat=1.25, con=1.1;
+  for (let i=0;i<px.length;i+=4){
+    const lum = px[i]*0.299 + px[i+1]*0.587 + px[i+2]*0.114;
+    px[i]   = (lum + (px[i]  -lum)*sat - 128)*con + 128;
+    px[i+1] = (lum + (px[i+1]-lum)*sat - 128)*con + 128;
+    px[i+2] = (lum + (px[i+2]-lum)*sat - 128)*con + 128;
+  }
+}
+
+// 锐化：非锐化掩模 USM，v + 0.7*(v - 4邻域均值)，跳过边缘 1px
+function sharpen(px,w,h){
+  const src = new Uint8ClampedArray(px);
+  const row = w*4;
+  for (let y=1;y<h-1;y++){
+    for (let x=1;x<w-1;x++){
+      const p=(y*w+x)*4;
+      for (let c=0;c<3;c++){
+        const avg=(src[p-4+c]+src[p+4+c]+src[p-row+c]+src[p+row+c])/4;
+        px[p+c]=src[p+c]+0.7*(src[p+c]-avg);
+      }
+    }
+  }
+}
+
 function quantizeTo2bpp(work){
-  const dither = $('dither').checked;
+  const mode = $('dmode').value;
+  const doSharp = $('sharpen').checked, doVivid = $('vivid').checked;
   const wc = work.getContext('2d');
   const img = wc.getImageData(0,0,SW,SH);
   const px = img.data;
   const w = SW, h = SH;
-  const err = dither ? new Float32Array(w*h*3) : null;
-  if (dither){
+  if (doVivid) enhance(px);
+  if (doSharp) sharpen(px,w,h);
+
+  const diff = (mode==='fs' || mode==='atkinson');  // 误差扩散类才需要 err 缓冲
+  const err = diff ? new Float32Array(w*h*3) : null;
+  if (diff){
     for (let i=0,j=0;i<w*h;i++,j+=3){
       err[j]=px[i*4]; err[j+1]=px[i*4+1]; err[j+2]=px[i*4+2];
     }
@@ -181,23 +260,35 @@ function quantizeTo2bpp(work){
     return best;
   };
   const cl = v => v<0?0:(v>255?255:v);
+  const kern = mode==='atkinson' ? ATK : FSK;
   for (let y=0;y<h;y++){
-    for (let x=0;x<w;x++){
+    const rtl = diff && (y&1);                    // 蛇形：偶数行 →，奇数行 ←
+    for (let n=0;n<w;n++){
+      const x = rtl ? w-1-n : n;
       const i=(y*w+x)*3, p4=(y*w+x)*4;
       let r,g,b;
-      if (dither){ r=cl(err[i]); g=cl(err[i+1]); b=cl(err[i+2]); }
-      else { r=px[p4]; g=px[p4+1]; b=px[p4+2]; }
+      if (diff){ r=cl(err[i]); g=cl(err[i+1]); b=cl(err[i+2]); }
+      else {
+        r=px[p4]; g=px[p4+1]; b=px[p4+2];
+        if (mode==='bayer'){
+          const t=(BAYER8[y&7][x&7]+0.5)/64-0.5;  // 归一化到 ±0.5
+          r+=t*64; g+=t*64; b+=t*64;              // ±32 级抖动幅度
+        }
+      }
       const k = near(r,g,b);
       oc[p4]=pal[k][0]; oc[p4+1]=pal[k][1]; oc[p4+2]=pal[k][2]; oc[p4+3]=255;
-      const byteI=(y*w+x)>>2, shift=6-((x&3)<<1);
+      // 竖屏画布 (x=列, y=行) → 设备帧缓冲 (行=x, 列=767-y)，
+      // 与旧版横屏 UI 选"旋转90°"的打包结果一致（已在屏幕上验证为正立显示）
+      const dx=(SH-1)-y, byteI=x*192+(dx>>2), shift=6-((dx&3)<<1);
       packedBuf[byteI] |= codes[k] << shift;
-      if (dither){
+      if (diff){
         const pr=r-pal[k][0], pg=g-pal[k][1], pb=b-pal[k][2];
-        if (x+1<w){ const j=(y*w+x+1)*3; err[j]+=pr*7/16; err[j+1]+=pg*7/16; err[j+2]+=pb*7/16; }
-        if (y+1<h){
-          if (x>0){ const j=((y+1)*w+x-1)*3; err[j]+=pr*3/16; err[j+1]+=pg*3/16; err[j+2]+=pb*3/16; }
-          const j2=((y+1)*w+x)*3; err[j2]+=pr*5/16; err[j2+1]+=pg*5/16; err[j2+2]+=pb*5/16;
-          if (x+1<w){ const j3=((y+1)*w+x+1)*3; err[j3]+=pr/16; err[j3+1]+=pg/16; err[j3+2]+=pb/16; }
+        for (let m=0;m<kern.length;m++){
+          const ox=kern[m][0], oy=kern[m][1], wt=kern[m][2];
+          const nx = rtl ? x-ox : x+ox, ny = y+oy;   // 蛇形反向行：偏移取反
+          if (nx<0||nx>=w||ny>=h) continue;
+          const j=(ny*w+nx)*3;
+          err[j]+=pr*wt; err[j+1]+=pg*wt; err[j+2]+=pb*wt;
         }
       }
     }
@@ -243,7 +334,7 @@ drop.addEventListener('drop', e=>{
 });
 $('rot').addEventListener('change', process);
 $('fit').addEventListener('change', process);
-$('dither').addEventListener('change', process);
+['dmode','sharpen','vivid'].forEach(id=>$(id).addEventListener('change', process));
 
 // ── 上传并显示 ──
 $('upbtn').addEventListener('click', async ()=>{
@@ -258,7 +349,12 @@ $('upbtn').addEventListener('click', async ()=>{
     const j = await r.json();
     if (!j.ok){ perr.textContent = j.msg || '上传失败'; $('upbtn').disabled=false; return; }
     toast('上传成功，屏幕刷新中（约 15 秒）…', 8000);
-    await fetch('/api/display?id='+j.id, {method:'POST'}).catch(()=>{});
+    await loadImages(); await loadStatus();   // 列表先更新，无需等刷屏结束
+    try {
+      const d = await fetch('/api/display?id='+j.id, {method:'POST'});
+      const dj = await d.json();
+      if (!dj.ok){ toast(dj.msg || '显示请求失败', 6000); }
+    } catch(e){ toast('显示请求失败：'+e.message, 6000); }
     await sleep(16000);
     await loadImages(); await loadStatus();
   } catch(e){ perr.textContent='上传失败：'+e.message; }
@@ -283,7 +379,7 @@ async function loadImages(){
         <span class="nm">${esc(im.name)}</span>
         <span class="meta">${fmtKB(im.size)}</span>
         ${im.current?'<span class="cur">屏幕显示中</span>':''}
-        <button class="sm ${im.current?'ghost':''}" data-show="${im.id}" ${im.current?'disabled':''}>显示</button>
+        <button class="sm ${im.current?'ghost':''}" data-show="${im.id}">显示</button>
         <button class="sm danger" data-del="${im.id}">删除</button>
       </li>`).join('');
     ul.querySelectorAll('[data-show]').forEach(b=>b.addEventListener('click', ()=>showImage(+b.dataset.show)));
@@ -325,7 +421,7 @@ $('clearbtn').addEventListener('click', async ()=>{
 
 $('refresh').addEventListener('click', async ()=>{ await loadImages(); await loadStatus(); });
 $('portalbtn').addEventListener('click', async ()=>{
-  if (!confirm('设备将重启进入配网模式（热点 InkSight-XXXX），确定？')) return;
+  if (!confirm('设备将重启进入配网模式（热点 ColorInk-XXXX），确定？')) return;
   await fetch('/restart', {method:'POST'}).catch(()=>{});
   toast('设备正在重启…');
 });
