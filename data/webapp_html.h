@@ -46,6 +46,12 @@ button.sm{padding:5px 12px;font-size:.82rem;border-radius:7px}
 .stat{display:flex;gap:14px;flex-wrap:wrap;font-size:.78rem;color:var(--gy);margin-top:6px}
 .stat b{color:var(--bk);font-weight:600}
 .err{color:var(--red);font-size:.85rem;margin-top:8px;min-height:1.2em}
+details.cal{margin-top:12px;border-top:1px solid #eee;padding-top:10px}
+details.cal summary{font-size:.82rem;color:var(--gy);cursor:pointer;list-style:none}
+details.cal summary::-webkit-details-marker{display:none}
+details.cal summary::before{content:'▸ ';font-size:.75rem}
+details.cal[open] summary::before{content:'▾ '}
+input[type=color]{width:34px;height:26px;padding:0;border:1px solid var(--bd);border-radius:6px;background:#fff;vertical-align:middle;margin-left:5px;cursor:pointer}
 </style>
 </head>
 <body>
@@ -91,12 +97,28 @@ button.sm{padding:5px 12px;font-size:.82rem;border-radius:7px}
       </div>
       <div class="err" id="perr"></div>
       <div class="legend">
-        <span><i style="background:#000"></i>黑</span>
-        <span><i style="background:#fff"></i>白</span>
-        <span><i style="background:#f0d600"></i>黄</span>
-        <span><i style="background:#be201c"></i>红</span>
+        <span><i id="sw0"></i>黑</span>
+        <span><i id="sw1"></i>白</span>
+        <span><i id="sw2"></i>黄</span>
+        <span><i id="sw3"></i>红</span>
         <span>552 × 768 · 四色 2bpp · 竖屏</span>
       </div>
+
+      <details class="cal">
+        <summary>色板校准（填实测面板色，预览即屏上效果）</summary>
+        <div class="row">
+          <label class="fl">黑<input type="color" id="pc0"></label>
+          <label class="fl">白<input type="color" id="pc1"></label>
+          <label class="fl">黄<input type="color" id="pc2"></label>
+          <label class="fl">红<input type="color" id="pc3"></label>
+          <button class="sm ghost" id="calshot">下载校准图</button>
+          <button class="sm ghost" id="calreset">恢复默认</button>
+        </div>
+        <div class="fl" style="font-size:.78rem">
+          流程：下载校准图 → 用本页上传到屏幕（抖动选"无"）→ 对屏幕拍照 → 用取色工具读取四个色块的
+          RGB → 填回上面。填入后量化目标和预览同步更新，改完记得重新上传目标图片。
+        </div>
+      </details>
     </div>
 
     <!-- 图库 -->
@@ -121,12 +143,19 @@ button.sm{padding:5px 12px;font-size:.82rem;border-radius:7px}
 // 控制器按"552 行 × 每行 768 像素"扫描，即帧缓冲里一"行"对应屏幕的竖直方向。
 // 因此画布用 552×768 竖屏排版，打包时转置写入设备帧缓冲。
 const SW = 552, SH = 768;
-const PALETTE = [
-  {rgb:[0,0,0],       code:0},  // 黑 00
-  {rgb:[255,255,255], code:1},  // 白 01
-  {rgb:[240,214,0],   code:2},  // 黄 10
-  {rgb:[190,32,28],   code:3},  // 红 11
-];
+// 面板调色板，索引 0..3 = 黑/白/黄/红，对应 2bpp 色码 00/01/10/11。
+// 理论 sRGB 值与墨水屏实际反射率差很多（黄偏暗、红偏褐），所以这里允许填「实测色」：
+// 下载校准图 → 上传到屏幕（抖动选"无"）→ 拍照取色 → 填回下面四个色块。
+// 量化目标和预览画布用同一组值，因此预览所见 = 屏上效果。
+const CODES = [0,1,2,3];
+const DEF_PAL = ['#000000','#ffffff','#f0d600','#be201c'];
+const PAL_KEY = 'inksight_pal';
+let PAL = DEF_PAL.slice();
+try {
+  const saved = JSON.parse(localStorage.getItem(PAL_KEY)||'null');
+  if (Array.isArray(saved) && saved.length===4 && saved.every(h=>/^#[0-9a-f]{6}$/i.test(h))) PAL = saved;
+} catch(e){}
+function hexToRgb(h){ return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)]; }
 
 const $ = id => document.getElementById(id);
 const drop=$('drop'), fileIn=$('file'), preview=$('preview'), perr=$('perr');
@@ -228,6 +257,25 @@ function sharpen(px,w,h){
   }
 }
 
+// 最近色判别用 Oklab 感知距离，而不是加权 RGB：加权 RGB 的权重是手调折中，
+// 遇到肤色/天空/橙色渐变容易把黄和红判错。Oklab（Ottosson）亮度+色度分离，
+// 小调色板下选色明显更准；sRGB→线性用 256 项 LUT，避免逐像素 pow。
+const LIN = new Float32Array(256);
+for (let i=0;i<256;i++){ const c=i/255; LIN[i] = c<=0.04045 ? c/12.92 : Math.pow((c+0.055)/1.055, 2.4); }
+
+// 返回 nearest 判据用的 Oklab 三元组，写入共享 tmp 避免逐像素分配
+const okTmp = [0,0,0];
+function srgbToOklab(r,g,b){
+  const lr=LIN[r|0], lg=LIN[g|0], lb=LIN[b|0];
+  const l = Math.cbrt(0.4122214708*lr + 0.5363325363*lg + 0.0514459929*lb);
+  const m = Math.cbrt(0.2119034982*lr + 0.6806995451*lg + 0.1073969566*lb);
+  const s = Math.cbrt(0.0883024619*lr + 0.2817188376*lg + 0.6299787005*lb);
+  okTmp[0] = 0.2104542553*l + 0.7936177850*m - 0.0040720468*s;
+  okTmp[1] = 1.9779984951*l - 2.4285922050*m + 0.4505937099*s;
+  okTmp[2] = 0.0259040371*l + 0.7827717662*m - 0.8086757660*s;
+  return okTmp;
+}
+
 function quantizeTo2bpp(work){
   const mode = $('dmode').value;
   const doSharp = $('sharpen').checked, doVivid = $('vivid').checked;
@@ -248,18 +296,22 @@ function quantizeTo2bpp(work){
   const packedBuf = new Uint8Array(w*h/4);       // 4 像素/字节，MSB first
   const out = new ImageData(w,h);
   const oc = out.data;
-  const pal = PALETTE.map(p=>p.rgb), codes = PALETTE.map(p=>p.code);
+  const pal = PAL.map(hexToRgb);
+  const palOK = pal.map(c=>srgbToOklab(c[0],c[1],c[2]).slice());  // 每次量化只算 4 次
   const NE = pal.length;
+  const cl = v => v<0?0:(v>255?255:v);
   const near = (r,g,b)=>{
+    const q = srgbToOklab(cl(r),cl(g),cl(b));
+    const q0=q[0], q1=q[1], q2=q[2];
     let best=0, bd=Infinity;
     for (let k=0;k<NE;k++){
-      const dr=r-pal[k][0], dg=g-pal[k][1], db=b-pal[k][2];
-      const d = 2*dr*dr + 4*dg*dg + 3*db*db;
+      const t=palOK[k];
+      const d0=q0-t[0], d1=q1-t[1], d2=q2-t[2];
+      const d = d0*d0 + d1*d1 + d2*d2;      // Oklab 欧氏距离（感知均匀）
       if (d<bd){ bd=d; best=k; }
     }
     return best;
   };
-  const cl = v => v<0?0:(v>255?255:v);
   const kern = mode==='atkinson' ? ATK : FSK;
   for (let y=0;y<h;y++){
     const rtl = diff && (y&1);                    // 蛇形：偶数行 →，奇数行 ←
@@ -280,7 +332,7 @@ function quantizeTo2bpp(work){
       // 竖屏画布 (x=列, y=行) → 设备帧缓冲 (行=x, 列=767-y)，
       // 与旧版横屏 UI 选"旋转90°"的打包结果一致（已在屏幕上验证为正立显示）
       const dx=(SH-1)-y, byteI=x*192+(dx>>2), shift=6-((dx&3)<<1);
-      packedBuf[byteI] |= codes[k] << shift;
+      packedBuf[byteI] |= CODES[k] << shift;
       if (diff){
         const pr=r-pal[k][0], pg=g-pal[k][1], pb=b-pal[k][2];
         for (let m=0;m<kern.length;m++){
@@ -335,6 +387,31 @@ drop.addEventListener('drop', e=>{
 $('rot').addEventListener('change', process);
 $('fit').addEventListener('change', process);
 ['dmode','sharpen','vivid'].forEach(id=>$(id).addEventListener('change', process));
+
+// ── 色板校准：面板实测色（localStorage 持久化，量化与预览共用） ──
+function syncPal(){
+  PAL.forEach((h,i)=>{ $('sw'+i).style.background = h; $('pc'+i).value = h; });
+}
+syncPal();
+PAL.forEach((_,i)=>$('pc'+i).addEventListener('change', e=>{
+  PAL[i] = e.target.value;
+  try { localStorage.setItem(PAL_KEY, JSON.stringify(PAL)); } catch(ex){}
+  syncPal(); process();
+}));
+$('calreset').addEventListener('click', ()=>{
+  PAL = DEF_PAL.slice();
+  try { localStorage.removeItem(PAL_KEY); } catch(ex){}
+  syncPal(); process(); toast('已恢复默认色板');
+});
+// 生成四色全屏色块图，供上传到屏幕后拍照取色
+$('calshot').addEventListener('click', ()=>{
+  const c = document.createElement('canvas'); c.width=SW; c.height=SH;
+  const x = c.getContext('2d');
+  PAL.forEach((h,i)=>{ x.fillStyle=h; x.fillRect(0, Math.round(i*SH/4), SW, Math.round(SH/4)); });
+  const a = document.createElement('a');
+  a.href = c.toDataURL('image/png'); a.download = 'palette_cal.png'; a.click();
+  toast('校准图已下载：上传到屏幕（抖动选"无"）后拍照取色', 7000);
+});
 
 // ── 上传并显示 ──
 $('upbtn').addEventListener('click', async ()=>{
