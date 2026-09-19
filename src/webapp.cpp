@@ -19,6 +19,19 @@ static String uploadErr;
 
 // ── WiFi station connection ─────────────────────────────────
 
+// 按 RSSI 自适应发射功率。ESP32-C3 默认 20dBm，发射瞬间电流 300mA 以上，
+// 是芯片发热的主因。近距离把功率降下来能显著降温且余量充足；弱信号时保持
+// 较高功率，避免丢包重传——重传反而更热，也会拖慢网页与上传。
+static void applyAdaptiveTxPower() {
+    int rssi = WiFi.RSSI();
+    wifi_power_t p = WIFI_POWER_17dBm;
+    if (rssi >= -60)      p = WIFI_POWER_8_5dBm;  // 同房间
+    else if (rssi >= -72) p = WIFI_POWER_13dBm;   // 隔一堵墙
+    WiFi.setTxPower(p);
+    Serial.printf("[NET] TX power %.2fdBm  RSSI=%d  modem-sleep=%s\n",
+                  (float)p / 4.0f, rssi, WiFi.getSleep() ? "on" : "OFF");
+}
+
 bool connectWiFiSTA(unsigned long perNetTimeoutMs, unsigned long budgetMs) {
     WiFi.mode(WIFI_STA);
     WiFi.setSleep(true);  // modem sleep: lower power/heat while idle
@@ -51,6 +64,7 @@ bool connectWiFiSTA(unsigned long perNetTimeoutMs, unsigned long budgetMs) {
                 Serial.printf("[NET] WiFi OK  IP=%s  RSSI=%d  (%lums)\n",
                               WiFi.localIP().toString().c_str(), WiFi.RSSI(),
                               millis() - budgetStart);
+                applyAdaptiveTxPower();
                 return true;
             }
             // AP 不在范围 / 认证失败：继续等满超时也没意义，立刻换下一个。
@@ -102,11 +116,17 @@ static void handleImages() {
 
 static void handleStatus() {
     float v = readBatteryVoltage();
-    String json = "{\"ip\":\"" + WiFi.localIP().toString() + "\"";
+    String json;
+    // Arduino String 的 += 每次都按精确长度重分配，不预留的话一次请求要
+    // realloc 十几次，长期频繁访问会在堆上留下碎片。
+    json.reserve(360);
+    json = "{\"ip\":\"" + WiFi.localIP().toString() + "\"";
     json += ",\"mdns\":\"inksight.local\"";
     json += ",\"ssid\":\"" + jsonEscape(WiFi.SSID()) + "\"";
     json += ",\"rssi\":" + String(WiFi.RSSI());
     json += ",\"heap\":" + String((unsigned)ESP.getFreeHeap());
+    json += ",\"minheap\":" + String((unsigned)ESP.getMinFreeHeap());
+    json += ",\"maxalloc\":" + String((unsigned)ESP.getMaxAllocHeap());
     json += ",\"battery\":\"" + String(v, 2) + "V\"";
     json += ",\"images\":" + String(galleryCount());
     json += ",\"current\":" + String(galleryCurrentId());
@@ -145,6 +165,14 @@ static void handleImageUpload() {
                 int id = galleryUploadEnd(name, &uploadErr);
                 uploadId = (id >= 0) ? id : -1;
             }
+            break;
+        case UPLOAD_FILE_ABORTED:
+            // 客户端中途断开（关页面、掉线、WiFi 抖动）。WebServer 在解析失败
+            // 后不会再调用最终 handler，所以收尾只能在这里做——否则文件句柄
+            // 和半截文件双双泄漏，反复几次后 LittleFS 就打不开文件了。
+            galleryUploadAbort();
+            uploadId = -1;
+            uploadErr = "";
             break;
         default:
             break;

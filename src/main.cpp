@@ -247,6 +247,29 @@ static void handleButton() {
     }
 }
 
+// ── Heap watchdog ───────────────────────────────────────────
+// 长期运行的内存体检，每分钟打一行。三个数一起看：
+//   free     —— 当前余量。稳态应是一条水平线；持续单调下滑 = 有泄漏
+//   min      —— 开机以来的最低水位。只要不再刷新新低，就没有累积占用
+//   maxalloc —— 最大连续可分配块，碎片化指标。它缩水比 free 缩水更危险，
+//               意味着后面 105KB 级别的分配随时可能失败
+// 注意：开机常驻 105KB colorBuf，所以 maxalloc 只有几十 KB 是正常的。
+static void logHeap()
+{
+    static unsigned long lastLog = 0;
+    static uint32_t lastFree = 0;
+    if (lastLog != 0 && millis() - lastLog < 60000UL)
+        return;
+    lastLog = millis();
+    uint32_t freeNow = ESP.getFreeHeap();
+    Serial.printf("[MEM] free=%u min=%u maxalloc=%u  delta=%+d  up=%lum\n",
+                  (unsigned)freeNow, (unsigned)ESP.getMinFreeHeap(),
+                  (unsigned)ESP.getMaxAllocHeap(),
+                  lastFree ? (int)freeNow - (int)lastFree : 0,
+                  millis() / 60000UL);
+    lastFree = freeNow;
+}
+
 // ── Server mode ─────────────────────────────────────────────
 
 void setup() {
@@ -293,10 +316,18 @@ void loop() {
     if (portalActive) {
         handlePortalClients();
         checkPortalTimeout();
+        delay(2); // 配网时射频常开 + modem sleep 关闭，CPU 再空转就是纯加热
         return;
     }
     webappHandle();
     webappProcessPending(); // 执行网页排队的刷屏/清屏（~15s，期间泵 HTTP 服务）
     handleWiFiWatchdog();
     handleButton();
+    logHeap();
+
+    // ESP32-C3 是单核：loop 任务全速空转会一直占着 CPU，idle 任务没机会跑，
+    // 芯片既不能降频也进不了空闲态，射频开着时整颗芯片持续发热。让出 2ms
+    // 对 HTTP 几乎无影响（lwIP 收包由协议栈自己完成，这里只是搬运速度），
+    // 上传 106KB 也仅多花百毫秒级。
+    delay(2);
 }

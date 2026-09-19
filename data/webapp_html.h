@@ -512,7 +512,7 @@ async function loadStatus(){
       `<span>WiFi <b>${esc(j.ssid)}</b> (${j.rssi}dBm)</span>`+
       `<span>电池 <b>${esc(j.battery)}</b></span>`+
       `<span>存储 <b>${(j.free_fs/1024).toFixed(0)} KB</b> 可用</span>`+
-      `<span>内存 <b>${(j.heap/1024).toFixed(0)} KB</b> 空闲</span>`;
+      `<span>内存 <b>${(j.heap/1024).toFixed(0)} KB</b> 空闲 · 最低 ${(j.minheap/1024).toFixed(0)} KB · 最大块 ${(j.maxalloc/1024).toFixed(0)} KB</span>`;
   } catch(e){}
 }
 

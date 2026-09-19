@@ -137,7 +137,10 @@ int galleryCount() {
 }
 
 String galleryListJson() {
-    String json = "{\"images\":[";
+    String json;
+    // 最多 20 条，每条约 80 字节；预留够长度可避免 += 触发几十次 realloc
+    json.reserve(64 + MAX_IMAGES * 80);
+    json = "{\"images\":[";
     int current = galleryCurrentId();
     if (fsReady) {
         // One directory scan captures id/name/size; then sort by id ascending
@@ -256,6 +259,21 @@ int galleryUploadEnd(const String &name, String *errOut) {
     uploadId = -1;
     uploadWritten = 0;
     return id;
+}
+
+// 上传中途客户端断开时调用。必须显式关闭：uploadFile 是静态对象，不关就
+// 一直占着一个 LittleFS 文件句柄；半截文件还会以正常命名留在 /img 里，
+// 既占 flash，又会被列表当成一张能点但读不出来的图。
+void galleryUploadAbort() {
+    if (!uploadFile) return;
+    String fname = uploadPath;
+    uploadFile.close();
+    if (fname.length() > 0) LittleFS.remove(fname);
+    Serial.printf("[GAL] upload aborted, removed %s (%u bytes written)\n",
+                  fname.c_str(), (unsigned)uploadWritten);
+    uploadId = -1;
+    uploadWritten = 0;
+    uploadOverflow = 0;
 }
 
 bool galleryDisplayById(int id) {

@@ -28,6 +28,9 @@ void galleryUploadData(const uint8_t *buf, size_t len);
 // Finish the upload. Verifies the total size; on failure the file is removed.
 // Returns the final id, or -1 on failure (errOut set).
 int  galleryUploadEnd(const String &name, String *errOut);
+// Client went away mid-upload: close the handle and delete the partial file.
+// Safe to call when no upload is in progress.
+void galleryUploadAbort();
 
 // Load image by id into colorBuf and refresh the panel (2bpp).
 // Returns false if the image does not exist.

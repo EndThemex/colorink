@@ -261,6 +261,8 @@ void startCaptivePortal(const char *apName)
     WiFi.setSleep(false); // 关掉 modem sleep：热点与 DHCP 响应才及时，手机不会因丢 beacon 掉线
     bool apOk = WiFi.softAP(apName);
     delay(150);
+    // 手机配网时就在设备旁边（1~2m），11dBm 绰绰有余；默认 20dBm 只是白发热。
+    WiFi.setTxPower(WIFI_POWER_11dBm);
 
     // DHCP 服务器没起来的话手机同样会"关联上但拿不到 IP"，这里兜底重启一次
     esp_netif_t *apNetif = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
