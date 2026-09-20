@@ -23,10 +23,13 @@ uint8_t imgBuf[IMG_BUF_LEN];
 uint8_t *colorBuf = nullptr;
 bool useColorBuf = false;
 
-bool ensureColorBuf() {
-    if (colorBuf) return true;
+bool ensureColorBuf()
+{
+    if (colorBuf)
+        return true;
     colorBuf = (uint8_t *)malloc(COLOR_BUF_LEN);
-    if (!colorBuf) {
+    if (!colorBuf)
+    {
         Serial.println("[MEM] colorBuf alloc failed");
         return false;
     }
@@ -34,8 +37,10 @@ bool ensureColorBuf() {
     return true;
 }
 
-void freeColorBuf() {
-    if (colorBuf) {
+void freeColorBuf()
+{
+    if (colorBuf)
+    {
         free(colorBuf);
         colorBuf = nullptr;
         Serial.println("[MEM] colorBuf freed");
@@ -43,11 +48,6 @@ void freeColorBuf() {
 }
 #endif
 
-// ── Network service pump ────────────────────────────────────
-// 一次墨水屏刷新要阻塞 ~15s。这段时间里持续泵一次网络服务，
-// 浏览器/配网页才不会"连上了但半天打不开"。
-// 屏幕刷新只从 loop() 上下文发起（网页请求仅入队，见 webappProcessPending），
-// 不会在 HTTP handler 内部刷新，所以这里泵 handleClient 不会重入。
 void netServicePump()
 {
     if (portalActive)
@@ -58,12 +58,14 @@ void netServicePump()
 
 // ── Battery voltage ─────────────────────────────────────────
 
-float readBatteryVoltage() {
+float readBatteryVoltage()
+{
     const int SAMPLES = 16;
-    const int DISCARD = 2;  // Discard highest and lowest outliers
+    const int DISCARD = 2; // Discard highest and lowest outliers
     int readings[SAMPLES];
 
-    for (int i = 0; i < SAMPLES; i++) {
+    for (int i = 0; i < SAMPLES; i++)
+    {
         readings[i] = analogRead(PIN_BAT_ADC);
         delayMicroseconds(100);
     }
@@ -71,7 +73,8 @@ float readBatteryVoltage() {
     // Sort for outlier removal
     for (int i = 0; i < SAMPLES - 1; i++)
         for (int j = i + 1; j < SAMPLES; j++)
-            if (readings[i] > readings[j]) {
+            if (readings[i] > readings[j])
+            {
                 int tmp = readings[i];
                 readings[i] = readings[j];
                 readings[j] = tmp;
@@ -86,7 +89,8 @@ float readBatteryVoltage() {
 #if defined(BOARD_PROFILE_ESP32_C3_WROOM02) || defined(BOARD_PROFILE_SMT_WROOM32E)
     static esp_adc_cal_characteristics_t adcChars;
     static bool calibrated = false;
-    if (!calibrated) {
+    if (!calibrated)
+    {
         esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adcChars);
         calibrated = true;
     }
@@ -101,7 +105,8 @@ float readBatteryVoltage() {
 
 // ── LED feedback ────────────────────────────────────────────
 
-static void ledInit() {
+static void ledInit()
+{
 #if PIN_LED >= 0
     pinMode(PIN_LED, OUTPUT);
     digitalWrite(PIN_LED, LOW);
@@ -111,19 +116,28 @@ static void ledInit() {
 #endif
 }
 
-static void ledFeedback(const char *pattern) {
+static void ledFeedback(const char *pattern)
+{
 #if PIN_LED < 0
     (void)pattern;
     return;
 #else
-    if (strcmp(pattern, "portal") == 0) {
-        digitalWrite(PIN_LED, HIGH);  // solid while portal is open
-    } else if (strcmp(pattern, "off") == 0) {
+    if (strcmp(pattern, "portal") == 0)
+    {
+        digitalWrite(PIN_LED, HIGH); // solid while portal is open
+    }
+    else if (strcmp(pattern, "off") == 0)
+    {
         digitalWrite(PIN_LED, LOW);
-    } else if (strcmp(pattern, "ack") == 0) {
-        for (int i = 0; i < 2; i++) {
-            digitalWrite(PIN_LED, HIGH); delay(80);
-            digitalWrite(PIN_LED, LOW);  delay(80);
+    }
+    else if (strcmp(pattern, "ack") == 0)
+    {
+        for (int i = 0; i < 2; i++)
+        {
+            digitalWrite(PIN_LED, HIGH);
+            delay(80);
+            digitalWrite(PIN_LED, LOW);
+            delay(80);
         }
     }
 #endif
@@ -131,7 +145,8 @@ static void ledFeedback(const char *pattern) {
 
 // ── Portal mode ─────────────────────────────────────────────
 
-enum class PortalEntryReason : uint8_t {
+enum class PortalEntryReason : uint8_t
+{
     MANUAL,
     AUTO_WIFI_FAILURE,
 };
@@ -139,7 +154,8 @@ enum class PortalEntryReason : uint8_t {
 static unsigned long portalStartedAt = 0;
 static unsigned long portalTimeoutMs = 0;
 
-static void enterPortalMode(PortalEntryReason reason) {
+static void enterPortalMode(PortalEntryReason reason)
+{
     unsigned long t0 = millis();
 
     // AP 名必须在关 WiFi / 切模式之前取（旧版能用的配网就是这个顺序），
@@ -159,26 +175,29 @@ static void enterPortalMode(PortalEntryReason reason) {
     Serial.printf("[PORTAL] AP '%s' visible at t=%lums\n", apName.c_str(), millis() - t0);
 
     // 屏幕只由网页控制：配网时也不刷屏，面板保留上一次的画面
-    freeColorBuf();  // 配网期间用不到帧缓冲，释放 105KB 堆给 lwIP（DNS/HTTP）
+    freeColorBuf(); // 配网期间用不到帧缓冲，释放 105KB 堆给 lwIP（DNS/HTTP）
 
     portalStartedAt = millis();
     portalTimeoutMs = (reason == PortalEntryReason::AUTO_WIFI_FAILURE)
-        ? PORTAL_AUTO_TIMEOUT_MS
-        : PORTAL_MANUAL_TIMEOUT_MS;
+                          ? PORTAL_AUTO_TIMEOUT_MS
+                          : PORTAL_MANUAL_TIMEOUT_MS;
     Serial.printf("[PORTAL] %s portal timeout: %lus\n",
                   reason == PortalEntryReason::AUTO_WIFI_FAILURE ? "Auto" : "Manual",
                   portalTimeoutMs / 1000UL);
 }
 
-static void checkPortalTimeout() {
-    if (portalStartedAt == 0) return;
+static void checkPortalTimeout()
+{
+    if (portalStartedAt == 0)
+        return;
     if (WiFi.softAPgetStationNum() > 0)
     {
         // 有设备连着热点：暂停超时，避免配网中途被重启踢掉
         portalStartedAt = millis();
         return;
     }
-    if (millis() - portalStartedAt < portalTimeoutMs) return;
+    if (millis() - portalStartedAt < portalTimeoutMs)
+        return;
     Serial.println("[PORTAL] timeout, restarting...");
     delay(200);
     ESP.restart();
@@ -190,14 +209,18 @@ static unsigned long wifiDownSince = 0;
 static unsigned long lastReconnectAttempt = 0;
 static int reconnectFails = 0;
 
-static void handleWiFiWatchdog() {
-    if (WiFi.status() == WL_CONNECTED) {
+static void handleWiFiWatchdog()
+{
+    if (WiFi.status() == WL_CONNECTED)
+    {
         wifiDownSince = 0;
         reconnectFails = 0;
         return;
     }
-    if (wifiDownSince == 0) wifiDownSince = millis();
-    if (millis() - lastReconnectAttempt < (unsigned long)LIVE_WIFI_RETRY_MS) return;
+    if (wifiDownSince == 0)
+        wifiDownSince = millis();
+    if (millis() - lastReconnectAttempt < (unsigned long)LIVE_WIFI_RETRY_MS)
+        return;
     lastReconnectAttempt = millis();
     Serial.println("[NET] WiFi lost, reconnecting...");
     // 运行中掉线多数是短暂抖动：用更短的预算快速试，试不通就早点开配网热点，
@@ -216,31 +239,40 @@ static void handleWiFiWatchdog() {
 
 // ── Button ──────────────────────────────────────────────────
 
-static void handleButton() {
+static void handleButton()
+{
     static bool pressed = false;
     static unsigned long pressStart = 0;
 
     bool down = digitalRead(PIN_CFG_BTN) == LOW;
-    if (down && !pressed) {
+    if (down && !pressed)
+    {
         pressed = true;
         pressStart = millis();
         return;
     }
-    if (down && pressed) {
-        if (millis() - pressStart >= (unsigned long)CFG_BTN_HOLD_MS) {
+    if (down && pressed)
+    {
+        if (millis() - pressStart >= (unsigned long)CFG_BTN_HOLD_MS)
+        {
             pressed = false;
             ledFeedback("off");
             enterPortalMode(PortalEntryReason::MANUAL);
         }
         return;
     }
-    if (!down && pressed) {
+    if (!down && pressed)
+    {
         pressed = false;
         unsigned long dur = millis() - pressStart;
-        if (dur >= (unsigned long)SHORT_PRESS_MIN_MS && dur < (unsigned long)CFG_BTN_HOLD_MS) {
-            if (galleryCount() > 0) {
-                galleryCycle(1);  // short press: next image (blocks ~15s)
-            } else {
+        if (dur >= (unsigned long)SHORT_PRESS_MIN_MS && dur < (unsigned long)CFG_BTN_HOLD_MS)
+        {
+            if (galleryCount() > 0)
+            {
+                galleryCycle(1); // short press: next image (blocks ~15s)
+            }
+            else
+            {
                 ledFeedback("ack");
             }
         }
@@ -272,7 +304,8 @@ static void logHeap()
 
 // ── Server mode ─────────────────────────────────────────────
 
-void setup() {
+void setup()
+{
     unsigned long bootT0 = millis();
     Serial.begin(115200);
     delay(150);
@@ -294,8 +327,10 @@ void setup() {
 
     bool btnHeld = digitalRead(PIN_CFG_BTN) == LOW;
 
-    if (!btnHeld && getWiFiCount() > 0) {
-        if (connectWiFiSTA()) {
+    if (!btnHeld && getWiFiCount() > 0)
+    {
+        if (connectWiFiSTA())
+        {
             Serial.printf("[BOOT] STA up t=%lums\n", millis() - bootT0);
             webappStart();
             Serial.printf("[BOOT] ready t=%lums\n", millis() - bootT0);
@@ -303,17 +338,23 @@ void setup() {
             return;
         }
         Serial.println("[NET] WiFi connect failed, entering portal");
-    } else if (btnHeld) {
+    }
+    else if (btnHeld)
+    {
         Serial.println("[BOOT] button held at boot, entering portal");
-    } else {
+    }
+    else
+    {
         Serial.println("[NET] no saved WiFi, entering portal");
     }
     enterPortalMode(btnHeld ? PortalEntryReason::MANUAL
                             : PortalEntryReason::AUTO_WIFI_FAILURE);
 }
 
-void loop() {
-    if (portalActive) {
+void loop()
+{
+    if (portalActive)
+    {
         handlePortalClients();
         checkPortalTimeout();
         delay(2); // 配网时射频常开 + modem sleep 关闭，CPU 再空转就是纯加热
