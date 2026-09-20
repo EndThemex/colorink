@@ -1,0 +1,1795 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>ColorInk 局域网图库 · Edge Aware 4 Color</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bk:#1a1a1a;--gy:#777;--bg:#f2f2ec;--card:#fff;--bd:#d8d8d0;--red:#b4342e;--yl:#c9a800;--f:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif}
+body{font-family:var(--f);background:var(--bg);color:var(--bk);line-height:1.55;padding:20px 16px 60px}
+.wrap{max-width:1080px;margin:0 auto}
+h1{font-size:1.35rem;letter-spacing:.5px;margin-bottom:2px}
+.sub{color:var(--gy);font-size:.82rem;margin-bottom:16px}
+.sub b{color:var(--bk)}
+.grid{display:grid;grid-template-columns:minmax(340px,1.15fr) minmax(300px,.85fr);gap:16px;align-items:start}
+@media(max-width:860px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:18px;box-shadow:0 2px 14px rgba(0,0,0,.05)}
+.card h2{font-size:1rem;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.card h2 .dot{width:9px;height:9px;border-radius:50%;background:var(--bk);display:inline-block}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:10px 0}
+label.fl{font-size:.82rem;color:var(--gy)}
+select,input[type=text]{padding:7px 10px;border:1px solid var(--bd);border-radius:8px;background:#fff;font-size:.9rem;font-family:inherit}
+input[type=checkbox]{width:16px;height:16px;accent-color:#000}
+button{font-family:inherit;cursor:pointer;border:1px solid var(--bk);background:var(--bk);color:#fff;padding:9px 18px;border-radius:9px;font-size:.92rem;transition:.15s}
+button:disabled{opacity:.45;cursor:not-allowed}
+button.ghost{background:#fff;color:var(--bk)}
+button.danger{background:#fff;color:var(--red);border-color:var(--red)}
+button.sm{padding:5px 12px;font-size:.82rem;border-radius:7px}
+#drop{border:2px dashed var(--bd);border-radius:12px;padding:26px 14px;text-align:center;color:var(--gy);font-size:.9rem;cursor:pointer;transition:.15s}
+#drop.hover{border-color:var(--bk);color:var(--bk);background:#f7f7f2}
+#preview{max-width:100%;max-height:65vh;border:1px solid var(--bd);border-radius:8px;background:#fff;image-rendering:pixelated;display:none;margin-top:12px;cursor:grab;user-select:none;-webkit-user-select:none;touch-action:none}
+#preview.dragging{cursor:grabbing}
+#posrow{display:none;align-items:center;gap:8px;font-size:.8rem;color:var(--gy);margin-top:6px;flex-wrap:wrap}
+#posrow .badge{background:#f7f7f2;border:1px solid var(--bd);border-radius:6px;padding:3px 8px;font-size:.78rem;color:var(--bk)}
+#posrow .hint{font-size:.74rem;color:var(--gy)}
+.legend{display:flex;gap:14px;font-size:.78rem;color:var(--gy);margin-top:8px;flex-wrap:wrap}
+.legend i{display:inline-block;width:11px;height:11px;border:1px solid #ccc;border-radius:3px;margin-right:4px;vertical-align:-1px}
+#imglist{list-style:none}
+#imglist li{display:flex;align-items:center;gap:10px;padding:10px 6px;border-bottom:1px solid #eee}
+#imglist li:last-child{border-bottom:none}
+#imglist .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.92rem}
+#imglist .meta{font-size:.75rem;color:var(--gy);white-space:nowrap}
+.cur{background:#fffbe0;border:1px solid #e6d96a;border-radius:5px;font-size:.7rem;padding:1px 6px;color:#8a7a00;white-space:nowrap}
+.empty{color:var(--gy);font-size:.88rem;padding:18px 4px;text-align:center}
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--bk);color:#fff;padding:10px 22px;border-radius:24px;font-size:.88rem;opacity:0;pointer-events:none;transition:.3s;max-width:86vw;text-align:center;z-index:9}
+#toast.show{opacity:.94}
+.stat{display:flex;gap:14px;flex-wrap:wrap;font-size:.78rem;color:var(--gy);margin-top:6px}
+.stat b{color:var(--bk);font-weight:600}
+.err{color:var(--red);font-size:.85rem;margin-top:8px;min-height:1.2em}
+details.cal{margin-top:12px;border-top:1px solid #eee;padding-top:10px}
+details.cal summary{font-size:.82rem;color:var(--gy);cursor:pointer;list-style:none}
+details.cal summary::-webkit-details-marker{display:none}
+details.cal summary::before{content:'▸ ';font-size:.75rem}
+details.cal[open] summary::before{content:'▾ '}
+input[type=color]{width:34px;height:26px;padding:0;border:1px solid var(--bd);border-radius:6px;background:#fff;vertical-align:middle;margin-left:5px;cursor:pointer}
+.note{font-size:.75rem;color:var(--gy);background:#f7f7f2;border-radius:8px;padding:9px 11px;margin-top:9px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ColorInk 图库</h1>
+  <div class="sub">选择本地图片 → 浏览器转换为黑/白/黄/红四色墨水屏数据 → 上传并在屏幕显示。也可用 <b>http://ColorInk.local</b> 访问本页。</div>
+
+  <div class="grid">
+    <div class="card">
+      <h2><span class="dot"></span>图片转换与上传</h2>
+      <div id="drop">点击选择图片，或把图片拖到这里<br><span style="font-size:.78rem">支持 JPG / PNG / WebP，浏览器本地完成四色转换</span></div>
+      <input type="file" id="file" accept="image/jpeg,image/png,image/webp" style="display:none">
+
+      <canvas id="preview" width="552" height="768"></canvas>
+
+      <div id="posrow">
+        <span class="badge">X <span id="posx">0</span></span>
+        <span class="badge">Y <span id="posy">0</span></span>
+        <button class="sm ghost" id="posreset">居中</button>
+        <span class="hint">在预览上按住拖动可调整位置</span>
+      </div>
+
+      <div class="row">
+        <label class="fl">旋转</label>
+        <select id="rot">
+          <option value="0">0°</option>
+          <option value="90">90°</option>
+          <option value="180">180°</option>
+          <option value="270">270°</option>
+        </select>
+        <label class="fl">填充</label>
+        <select id="fit">
+          <option value="cover">铺满（裁边）</option>
+          <option value="contain">完整（留白）</option>
+        </select>
+        <label class="fl">抖动</label>
+        <select id="dmode">
+          <option value="fs">FS · 对比度感知（推荐）</option>
+          <option value="atkinson">Atkinson · 四色边缘感知</option>
+          <option value="bayer">Bayer · 保边缘</option>
+          <option value="none">无抖动 · 纯色块</option>
+        </select>
+        <label class="fl"><input type="checkbox" id="sharpen"> 轻度锐化</label>
+        <label class="fl"><input type="checkbox" id="vivid"> 轻度鲜艳</label>
+      </div>
+
+      <div class="row">
+        <input type="text" id="iname" placeholder="图片名称（可选）" style="flex:1;min-width:160px">
+        <button id="upbtn" disabled>上传并显示</button>
+      </div>
+
+      <div class="err" id="perr"></div>
+
+      <div class="legend">
+        <span><i id="sw0"></i>黑</span>
+        <span><i id="sw1"></i>白</span>
+        <span><i id="sw2"></i>黄</span>
+        <span><i id="sw3"></i>红</span>
+        <span>552 × 768 · 四色 2bpp · 竖屏</span>
+      </div>
+
+      <div class="note">
+        当前量化使用「理想四色」；下面的色板只用于浏览器预览和校准，不改变四色边界。
+        算法使用真实图像边缘进行对比度感知误差扩散，并对中性灰限制为黑/白，减少白字红边、白脸黄边和黑色线稿串色。
+      </div>
+
+      <details class="cal">
+        <summary>显示色板校准（仅影响预览）</summary>
+        <div class="row">
+          <label class="fl">黑<input type="color" id="pc0"></label>
+          <label class="fl">白<input type="color" id="pc1"></label>
+          <label class="fl">黄<input type="color" id="pc2"></label>
+          <label class="fl">红<input type="color" id="pc3"></label>
+          <button class="sm ghost" id="calshot">下载校准图</button>
+          <button class="sm ghost" id="calreset">恢复默认</button>
+        </div>
+        <div class="fl" style="font-size:.78rem">
+          下载校准图 → 用本页上传到屏幕（抖动选“无”）→ 对屏幕拍照 → 取四个色块 RGB → 填回。
+          这些值只用于浏览器预览，不会改变原图的四色量化。
+        </div>
+      </details>
+    </div>
+
+    <div class="card">
+      <h2><span class="dot"></span>设备图库 <span style="flex:1"></span>
+        <button class="sm ghost" id="refresh">刷新</button></h2>
+      <ul id="imglist"><li class="empty">加载中…</li></ul>
+      <div class="row" style="margin-top:12px">
+        <button class="sm ghost" id="clearbtn">屏幕清为全白</button>
+        <span style="flex:1"></span>
+        <button class="sm ghost" id="portalbtn">重新配网</button>
+      </div>
+      <div class="stat" id="stat"></div>
+    </div>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   ColorInk · Contrast-Aware 4-Color Quantizer v5.1
+   ------------------------------------------------------------
+   参考：OpenDisplay/epaper-dithering、paperlesspaper/epdoptimize 的有限色板量化思路。
+   目标：
+   1. 552×768，黑/白/黄/红，2bpp
+   2. QUANT_PAL 与 DISPLAY_PAL 分离
+   3. 第一遍建立“四色结构图”
+   4. 根据原始 Oklab 对比度生成 edge-aware map
+   5. FS / Atkinson 误差根据真实边缘抑制，并对剩余权重重新归一化
+   6. 中性灰只允许黑/白，避免黑底白字产生红/黄边
+   7. 黑色保护线稿、白色保护高光、黄/红保护色块
+   ============================================================ */
+
+const SW = 552, SH = 768;
+const PIXELS = SW * SH;
+const ROW_BYTES = SH >> 2;
+const FRAME_BYTES = PIXELS >> 2;
+
+const CODES = [0,1,2,3];
+
+/* 理想量化色板：永远不被屏幕实测色覆盖 */
+const QUANT_PAL = [
+  '#000000', // 0 black
+  '#ffffff', // 1 white
+  '#f0d600', // 2 yellow
+  '#be201c'  // 3 red
+];
+
+/* 只用于浏览器预览 */
+const DISPLAY_PAL_DEFAULT = QUANT_PAL.slice();
+const DISPLAY_PAL_KEY = 'colorink_display_pal_v3';
+let DISPLAY_PAL = DISPLAY_PAL_DEFAULT.slice();
+
+try {
+  const saved = JSON.parse(localStorage.getItem(DISPLAY_PAL_KEY) || 'null');
+  if (
+    Array.isArray(saved) &&
+    saved.length === 4 &&
+    saved.every(h => /^#[0-9a-f]{6}$/i.test(h))
+  ) DISPLAY_PAL = saved;
+} catch (_) {}
+
+function $(id){ return document.getElementById(id); }
+
+const drop = $('drop');
+const fileIn = $('file');
+const preview = $('preview');
+const perr = $('perr');
+
+let srcImage = null;
+let packed = null;
+
+/*
+  缓存最近一次 "偏移=0 时的量化结果"。
+
+  拖动期间不重新量化，只把这个画布按 imgOffsetX/Y 画到
+  preview 上。一次 drawImage 即可，毫秒级。
+*/
+const quantCache = document.createElement('canvas');
+quantCache.width = SW;
+quantCache.height = SH;
+const quantCacheOK = { v: false };
+
+/*
+  缓存 "已经按 rot/fit 缩放+旋转到 552×768 的源图"。
+  该画布内容不依赖 imgOffsetX/Y。
+  拖动期间：drawToWork 只负责把 srcCache 按偏移贴到 work 上。
+*/
+const srcCache = document.createElement('canvas');
+srcCache.width = SW;
+srcCache.height = SH;
+const srcCacheKey = { rot: -1, fit: '', src: null };
+
+/*
+  用户在预览上拖动产生的偏移（设备像素）。
+  正数 = 图片向右/向下移动。
+  最终位置会在 drawToWork 中应用到 work canvas 上，
+  越界区域被填白。
+*/
+let imgOffsetX = 0;
+let imgOffsetY = 0;
+
+function clampOffset(){
+  imgOffsetX = Math.max(-SW, Math.min(SW, imgOffsetX|0));
+  imgOffsetY = Math.max(-SH, Math.min(SH, imgOffsetY|0));
+}
+
+function syncPosUI(){
+  $('posx').textContent = imgOffsetX;
+  $('posy').textContent = imgOffsetY;
+  $('posrow').style.display = 'flex';
+}
+
+function toast(msg, ms=2600){
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove('show'), ms);
+}
+
+function sleep(ms){
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function clamp8(v){
+  return v < 0 ? 0 : v > 255 ? 255 : v;
+}
+
+function hexToRgb(h){
+  return [
+    parseInt(h.slice(1,3),16),
+    parseInt(h.slice(3,5),16),
+    parseInt(h.slice(5,7),16)
+  ];
+}
+
+/* ============================================================
+   颜色基础
+   ============================================================ */
+
+const QUANT_RGB = QUANT_PAL.map(hexToRgb);
+
+/* sRGB -> linear LUT */
+const LIN = new Float32Array(256);
+for(let i=0;i<256;i++){
+  const c = i / 255;
+  LIN[i] = c <= 0.04045
+    ? c / 12.92
+    : Math.pow((c + 0.055) / 1.055, 2.4);
+}
+
+/* 每种量化色的 Oklab */
+function rgbToOklab(r,g,b){
+  const lr = LIN[clamp8(r)|0];
+  const lg = LIN[clamp8(g)|0];
+  const lb = LIN[clamp8(b)|0];
+
+  const l = Math.cbrt(
+    0.4122214708*lr +
+    0.5363325363*lg +
+    0.0514459929*lb
+  );
+  const m = Math.cbrt(
+    0.2119034982*lr +
+    0.6806995451*lg +
+    0.1073969566*lb
+  );
+  const s = Math.cbrt(
+    0.0883024619*lr +
+    0.2817188376*lg +
+    0.6299787005*lb
+  );
+
+  return [
+    0.2104542553*l + 0.7936177850*m - 0.0040720468*s,
+    1.9779984951*l - 2.4285922050*m + 0.4505937099*s,
+    0.0259040371*l + 0.7827717662*m - 0.8086757660*s
+  ];
+}
+
+const QUANT_OK = QUANT_RGB.map(c => rgbToOklab(c[0],c[1],c[2]));
+
+/*
+  对边缘强度进行非线性压缩。
+  edge=0：没有明显边缘，允许扩散。
+  edge=1：强边缘，只允许很少的误差跨越。
+*/
+function edgeGate(edge){
+  if(edge < 0.035) return 1.00;
+  if(edge < 0.08)  return 0.85;
+  if(edge < 0.15)  return 0.55;
+  if(edge < 0.25)  return 0.22;
+  return 0.035;
+}
+
+/*
+  原始颜色是否为中性。
+  这是黑底白字问题的关键：
+  中性灰不能因为 Oklab 几何距离而被红/黄吸走。
+*/
+function neutralClass(L,a,b){
+  const chroma = Math.hypot(a,b);
+
+  if(chroma < 0.020) return 2; // very neutral
+  if(chroma < 0.040) return 1; // near neutral
+  return 0;                    // chromatic
+}
+
+/*
+  颜色语义：
+  black = 暗部/线稿
+  white = 高亮/高光
+  yellow = 黄区域
+  red = 红区域
+*/
+function colorBiasCost(k, L, a, b, r, g, bl){
+  let bias = 0;
+
+  const chroma = Math.hypot(a,b);
+
+  /* 黑：保护真正的深黑线稿 */
+  if(k === 0){
+    if(L < 0.22) bias -= 0.0045;
+    else if(L < 0.34) bias -= 0.0015;
+  }
+
+  /* 白：保护真正的高亮区域 */
+  if(k === 1){
+    if(L > 0.92) bias -= 0.0040;
+    else if(L > 0.82 && chroma < 0.07) bias -= 0.0015;
+  }
+
+  /* 黄：a 偏正、b 偏正 */
+  if(k === 2){
+    if(r > 125 && g > 105 && bl < 120 && Math.abs(r-g) < 85){
+      bias -= 0.0018;
+    }
+  }
+
+  /* 红：a 正、b 偏中/负 */
+  if(k === 3){
+    if(r > g*1.22 && r > bl*1.35){
+      bias -= 0.0018;
+    }
+  }
+
+  return bias;
+}
+
+/*
+  对非常接近中性的像素限制候选色。
+  这是“白字红边”的第二道保险。
+*/
+function allowedByNeutral(k, neutral, L){
+  if(neutral >= 2){
+    return k === 0 || k === 1;
+  }
+
+  if(neutral === 1){
+    /*
+      接近中性的像素：
+      暗部优先黑；
+      亮部优先白；
+      红/黄仍然可以竞争，但需要更大的色差优势。
+    */
+    if(L < 0.40) return k === 0 || k === 1;
+    if(L > 0.72) return k === 0 || k === 1;
+  }
+
+  return true;
+}
+
+/* ============================================================
+   缩放 / 旋转
+   ============================================================ */
+
+/*
+  把原图按当前 rot/fit 缩放+旋转到 SW×SH，写入 srcCache。
+  仅依赖 img/rot/fit；和 imgOffsetX/Y 无关。
+  拖动偏移时不需要重跑这段。
+*/
+function prepareSrcCache(img){
+  const rot = +$('rot').value;
+  const fit = $('fit').value;
+
+  if(
+    srcCacheKey.src === img &&
+    srcCacheKey.rot === rot &&
+    srcCacheKey.fit === fit
+  ){
+    return;
+  }
+
+  const landscape = rot === 0 || rot === 180;
+  const tw = landscape ? SW : SH;
+  const th = landscape ? SH : SW;
+
+  let src = img;
+  let cw = img.width;
+  let ch = img.height;
+
+  const finalScale = fit === 'cover'
+    ? Math.max(tw/cw, th/ch)
+    : Math.min(tw/cw, th/ch);
+
+  const targetW = cw * finalScale;
+  const targetH = ch * finalScale;
+
+  /*
+    大图分步缩小，减少一次性 downsample 造成的细节/边缘损失。
+  */
+  while((cw >> 1) >= targetW && (ch >> 1) >= targetH){
+    const nc = document.createElement('canvas');
+    nc.width = Math.max(1, cw >> 1);
+    nc.height = Math.max(1, ch >> 1);
+
+    const nx = nc.getContext('2d');
+    nx.imageSmoothingEnabled = true;
+    nx.imageSmoothingQuality = 'high';
+    nx.drawImage(src,0,0,nc.width,nc.height);
+
+    src = nc;
+    cw = nc.width;
+    ch = nc.height;
+  }
+
+  const tmp = document.createElement('canvas');
+  tmp.width = tw;
+  tmp.height = th;
+
+  const tc = tmp.getContext('2d');
+  tc.imageSmoothingEnabled = true;
+  tc.imageSmoothingQuality = 'high';
+  tc.fillStyle = '#ffffff';
+  tc.fillRect(0,0,tw,th);
+
+  const s = fit === 'cover'
+    ? Math.max(tw/cw, th/ch)
+    : Math.min(tw/cw, th/ch);
+
+  const dw = cw*s;
+  const dh = ch*s;
+
+  tc.drawImage(src,(tw-dw)/2,(th-dh)/2,dw,dh);
+
+  const sc = srcCache.getContext('2d');
+  sc.imageSmoothingEnabled = true;
+  sc.imageSmoothingQuality = 'high';
+  sc.fillStyle = '#ffffff';
+  sc.fillRect(0,0,SW,SH);
+
+  sc.save();
+
+  if(rot === 0){
+    sc.drawImage(tmp,0,0);
+  }else if(rot === 90){
+    sc.translate(SW,0);
+    sc.rotate(Math.PI/2);
+    sc.drawImage(tmp,0,0);
+  }else if(rot === 180){
+    sc.translate(SW,SH);
+    sc.rotate(Math.PI);
+    sc.drawImage(tmp,0,0);
+  }else{
+    sc.translate(0,SH);
+    sc.rotate(-Math.PI/2);
+    sc.drawImage(tmp,0,0);
+  }
+
+  sc.restore();
+
+  srcCacheKey.src = img;
+  srcCacheKey.rot = rot;
+  srcCacheKey.fit = fit;
+}
+
+/*
+  把 srcCache 按当前偏移贴到 work（552×768）上。
+  越界部分由 work 背景白色填充。
+  单次 drawImage，约 1–2ms，可承受拖动期间频繁调用。
+*/
+function drawToWork(){
+  const work = document.createElement('canvas');
+  work.width = SW;
+  work.height = SH;
+
+  const wc = work.getContext('2d');
+  wc.imageSmoothingEnabled = true;
+  wc.imageSmoothingQuality = 'high';
+  wc.fillStyle = '#ffffff';
+  wc.fillRect(0,0,SW,SH);
+
+  const ox = imgOffsetX|0;
+  const oy = imgOffsetY|0;
+
+  const srcX = ox < 0 ? -ox : 0;
+  const srcY = oy < 0 ? -oy : 0;
+  const dstX = Math.max(0, ox);
+  const dstY = Math.max(0, oy);
+  const srcW = Math.max(0, Math.min(SW - srcX, SW - dstX));
+  const srcH = Math.max(0, Math.min(SH - srcY, SH - dstY));
+
+  if(srcW > 0 && srcH > 0){
+    wc.drawImage(
+      srcCache,
+      srcX, srcY, srcW, srcH,
+      dstX, dstY, srcW, srcH
+    );
+  }
+
+  return work;
+}
+
+/* ============================================================
+   前处理
+   ============================================================ */
+
+/* 轻度饱和/对比度增强，仅用户手动开启 */
+function enhance(px){
+  const sat = 1.10;
+  const con = 1.04;
+
+  for(let i=0;i<px.length;i+=4){
+    const lum =
+      px[i]*0.299 +
+      px[i+1]*0.587 +
+      px[i+2]*0.114;
+
+    px[i] =
+      (lum + (px[i]-lum)*sat - 128)*con + 128;
+    px[i+1] =
+      (lum + (px[i+1]-lum)*sat - 128)*con + 128;
+    px[i+2] =
+      (lum + (px[i+2]-lum)*sat - 128)*con + 128;
+  }
+}
+
+/*
+  亮度锐化，而不是 RGB 独立锐化。
+  避免红/黄边缘产生彩色过冲。
+*/
+function sharpenLuma(px,w,h){
+  const src = new Uint8ClampedArray(px);
+  const row = w*4;
+  const amount = 0.42;
+
+  for(let y=1;y<h-1;y++){
+    for(let x=1;x<w-1;x++){
+      const p = (y*w+x)*4;
+
+      const y0 =
+        src[p]*0.299 +
+        src[p+1]*0.587 +
+        src[p+2]*0.114;
+
+      const yl =
+        src[p-4]*0.299 +
+        src[p-3]*0.587 +
+        src[p-2]*0.114;
+
+      const yr =
+        src[p+4]*0.299 +
+        src[p+5]*0.587 +
+        src[p+6]*0.114;
+
+      const yu =
+        src[p-row]*0.299 +
+        src[p-row+1]*0.587 +
+        src[p-row+2]*0.114;
+
+      const yd =
+        src[p+row]*0.299 +
+        src[p+row+1]*0.587 +
+        src[p+row+2]*0.114;
+
+      const avg = (yl+yr+yu+yd)/4;
+      const delta = (y0-avg)*amount;
+
+      px[p]   = clamp8(src[p]   + delta);
+      px[p+1] = clamp8(src[p+1] + delta);
+      px[p+2] = clamp8(src[p+2] + delta);
+    }
+  }
+}
+
+/* ============================================================
+   第一遍：建立初始四色结构
+   ============================================================ */
+
+function buildInitialLabels(px, w, h){
+  const labels = new Uint8Array(w*h);
+  const lab = new Float32Array(w*h*3);
+
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const p = (y*w+x)*4;
+      const r = px[p];
+      const g = px[p+1];
+      const b = px[p+2];
+
+      const q = rgbToOklab(r,g,b);
+      const L = q[0];
+      const a = q[1];
+      const bb = q[2];
+
+      const li = (y*w+x)*3;
+      lab[li] = L;
+      lab[li+1] = a;
+      lab[li+2] = bb;
+
+      const neutral = neutralClass(L,a,bb);
+      let best = 0;
+      let bestCost = Infinity;
+
+      for(let k=0;k<4;k++){
+        if(!allowedByNeutral(k,neutral,L)) continue;
+
+        const t = QUANT_OK[k];
+        const dl = L-t[0];
+        const da = a-t[1];
+        const db = bb-t[2];
+
+        /*
+          L/a/b 基础距离。
+          这里不把显示色板带进来。
+        */
+        let cost = dl*dl + da*da + db*db;
+
+        cost += colorBiasCost(k,L,a,bb,r,g,b);
+
+        /*
+          对接近中性的像素：
+          彩色候选再增加一点代价。
+          这样“灰色抗锯齿边缘”不会轻易跳成红/黄。
+        */
+        if(neutral === 1 && (k === 2 || k === 3)){
+          cost += 0.0035;
+        }
+
+        if(cost < bestCost){
+          bestCost = cost;
+          best = k;
+        }
+      }
+
+      labels[y*w+x] = best;
+    }
+  }
+
+  return {labels,lab};
+}
+
+/* ============================================================
+   四色结构细化
+   ------------------------------------------------------------
+   不做大范围模糊，只处理“单像素孤岛”。
+   目的：
+   - 黑线中的孤立红点 -> 黑
+   - 白字中的孤立黄/红点 -> 白
+   - 大面积颜色区域不会被改写
+   ============================================================ */
+
+function refineIsolatedLabels(labels, lab, w, h){
+  const out = new Uint8Array(labels);
+
+  for(let y=1;y<h-1;y++){
+    for(let x=1;x<w-1;x++){
+      const idx = y*w+x;
+      const k = labels[idx];
+
+      let same = 0;
+      const n = [
+        labels[idx-1],
+        labels[idx+1],
+        labels[idx-w],
+        labels[idx+w]
+      ];
+
+      for(let i=0;i<4;i++) if(n[i] === k) same++;
+
+      if(same >= 2) continue;
+
+      const votes = [0,0,0,0];
+      for(let i=0;i<4;i++) votes[n[i]]++;
+
+      let best = k;
+      let bestVotes = votes[k];
+
+      for(let c=0;c<4;c++){
+        if(votes[c] > bestVotes){
+          best = c;
+          bestVotes = votes[c];
+        }
+      }
+
+      /*
+        只有当邻居中至少 3 个支持另一颜色时才修正。
+        防止正常细线被吞掉。
+      */
+      if(best !== k && bestVotes >= 3){
+        const li = idx*3;
+        const L = lab[li];
+        const a = lab[li+1];
+        const b = lab[li+2];
+        const neutral = neutralClass(L,a,b);
+
+        if(allowedByNeutral(best,neutral,L)){
+          out[idx] = best;
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
+/* ============================================================
+   Edge Map
+   ------------------------------------------------------------
+   每个像素保存：
+   edgeR = 与右邻居的 Oklab 色差
+   edgeD = 与下邻居的 Oklab 色差
+
+   另外结合第一遍的四色 label：
+   如果“原图差异 + 四色类别差异”同时成立，
+   这是强四色边界。
+   ============================================================ */
+
+function buildEdgeMaps(lab, labels, w, h){
+  /*
+    v5 关键改变：Edge Map 只来自原始 Oklab 图像，不再使用
+    第一次量化得到的 label 强行制造边缘。
+
+    原因：
+      label -> edge -> diffusion -> label
+    会形成反馈回路，容易把第一次误判的颜色边界“锁死”。
+
+    labels 参数保留只是为了兼容调用方，不参与 edge 计算。
+  */
+  const edgeR = new Uint8Array(w*h);
+  const edgeD = new Uint8Array(w*h);
+
+  function calcEdge(i,j){
+    const a = i*3;
+    const b = j*3;
+
+    const dl = lab[a]-lab[b];
+    const da = lab[a+1]-lab[b+1];
+    const db = lab[a+2]-lab[b+2];
+
+    /* OKLab 欧氏距离；避免过度放大弱纹理 */
+    const d = Math.sqrt(dl*dl + da*da + db*db);
+    return Math.min(1, d * 3.2);
+  }
+
+  for(let y=0;y<h;y++){
+    const row = y*w;
+    for(let x=0;x<w;x++){
+      const i = row+x;
+      if(x+1<w) edgeR[i] = Math.round(calcEdge(i,i+1)*255);
+      if(y+1<h) edgeD[i] = Math.round(calcEdge(i,i+w)*255);
+    }
+  }
+
+  return {edgeR,edgeD};
+}
+
+/*
+  v5：边缘只控制“误差是否跨越真实图像边界”。
+  不再使用 B/W/Y/R pair matrix，也不把第一次量化 label
+  当作真实边界。
+*/
+function edgeGate(edge){
+  if(edge < 0.025) return 1.00;
+  if(edge < 0.060) return 0.92;
+  if(edge < 0.110) return 0.68;
+  if(edge < 0.180) return 0.32;
+  if(edge < 0.280) return 0.10;
+  return 0.025;
+}
+
+/* ============================================================
+   对比度感知误差扩散
+   ------------------------------------------------------------
+   与 v4 最大区别：
+
+   1. 不依赖第一次 quantization 的 label。
+   2. 根据真实 Oklab edge 对 FS/Atkinson 权重做 gate。
+   3. 对保留下来的权重重新归一化，尽量保持误差守恒。
+   4. 强边缘两侧的误差优先留在同一侧，而不是直接丢失。
+
+   这比“PAIR_DIFFUSION × edgeGate 后直接丢误差”稳定。
+   ============================================================
+*/
+function buildDiffusionWeights(kernel, x, y, rtl, edgeR, edgeD){
+  const items = [];
+  let sum = 0;
+
+  for(let m=0;m<kernel.length;m++){
+    const ox = kernel[m][0];
+    const oy = kernel[m][1];
+    const wt = kernel[m][2];
+
+    const nx = rtl ? x-ox : x+ox;
+    const ny = y+oy;
+
+    if(nx<0 || nx>=SW || ny<0 || ny>=SH) continue;
+
+    let edge;
+    if(oy === 0){
+      const left = Math.min(x,nx);
+      edge = edgeR[y*SW+left] / 255;
+    }else{
+      const topY = Math.min(y,ny);
+      edge = edgeD[topY*SW+x] / 255;
+    }
+
+    const gate = edgeGate(edge);
+    const weight = wt * gate;
+
+    if(weight > 0){
+      items.push({nx,ny,ox,oy,weight});
+      sum += weight;
+    }
+  }
+
+  /*
+    v5.1：只对“边缘抑制造成的权重损失”做有限补偿。
+
+    不能简单 scale = 1/sum：
+    如果一个白字边缘像素的所有未来邻居都是黑色一侧，
+    那样会把原本被抑制的误差再次 100% 推过边缘，
+    等于取消 edge-aware 的意义。
+
+    因此最多只恢复到 valid kernel weight 的 175%，
+    强边缘仍然会丢弃大部分误差；无边缘时完全保持原 kernel。
+  */
+  if(sum > 1e-8){
+    let baseSum = 0;
+    for(let m=0;m<kernel.length;m++){
+      const ox = kernel[m][0];
+      const oy = kernel[m][1];
+      const nx = rtl ? x-ox : x+ox;
+      const ny = y+oy;
+      if(nx>=0 && nx<SW && ny>=0 && ny<SH){
+        baseSum += kernel[m][2];
+      }
+    }
+
+    const targetSum = Math.min(baseSum, sum * 1.75);
+    const scale = targetSum / sum;
+
+    for(const it of items) it.weight *= scale;
+  }
+
+  return items;
+}
+
+/* ============================================================
+   量化器
+   ============================================================ */
+
+const BAYER8 = [
+  [ 0,32, 8,40, 2,34,10,42],
+  [48,16,56,24,50,18,58,26],
+  [12,44, 4,36,14,46, 6,38],
+  [60,28,52,20,62,30,54,22],
+  [ 3,35,11,43, 1,33, 9,41],
+  [51,19,59,27,49,17,57,25],
+  [15,47, 7,39,13,45, 5,37],
+  [63,31,55,23,61,29,53,21]
+];
+
+const FSK = [
+  [ 1,0,7/16],
+  [-1,1,3/16],
+  [ 0,1,5/16],
+  [ 1,1,1/16]
+];
+
+const ATK = [
+  [ 1,0,1/8],
+  [ 2,0,1/8],
+  [-1,1,1/8],
+  [ 0,1,1/8],
+  [ 1,1,1/8],
+  [ 2,1,1/8]
+];
+
+function quantizeTo2bpp(work){
+  const mode = $('dmode').value;
+  const doSharp = $('sharpen').checked;
+  const doVivid = $('vivid').checked;
+
+  const wc = work.getContext('2d');
+  const image = wc.getImageData(0,0,SW,SH);
+  const px = image.data;
+
+  if(doVivid) enhance(px);
+  if(doSharp) sharpenLuma(px,SW,SH);
+
+  /*
+    第一遍：建立四色结构。
+    这里故意不使用抖动，避免抖动纹理污染边缘判断。
+  */
+  const first = buildInitialLabels(px,SW,SH);
+
+  /*
+    只清理单像素孤岛，不做大范围形态学处理。
+  */
+  const labels = refineIsolatedLabels(
+    first.labels,
+    first.lab,
+    SW,
+    SH
+  );
+
+  /*
+    只根据原始 Oklab 建立真实图像边缘图，避免量化标签制造反馈边界。
+  */
+  const {edgeR,edgeD} = buildEdgeMaps(
+    first.lab,
+    labels,
+    SW,
+    SH
+  );
+
+  const out = new ImageData(SW,SH);
+  const oc = out.data;
+
+  const packedBuf = new Uint8Array(FRAME_BYTES);
+
+  const diffMode =
+    mode === 'fs' ||
+    mode === 'atkinson';
+
+  const kernel =
+    mode === 'atkinson' ? ATK : FSK;
+
+  /*
+    只保存两行“误差”，不能把原图像素放进这里。
+
+    每个像素真正参与量化的值是：
+      originalRGB + currentErr
+
+    这样换行后，currentErr 只包含上一行传播下来的误差，
+    当前行的原始像素仍然会正常参与量化。
+
+    不再使用全图 4.8MB err buffer。
+  */
+  let currentErr = diffMode
+    ? new Float32Array(SW*3)
+    : null;
+
+  let nextErr = diffMode
+    ? new Float32Array(SW*3)
+    : null;
+
+  function candidateIndex(
+    r,g,b,
+    originalR,originalG,originalB,
+    originalL,originalA,originalBOK
+  ){
+    const q = rgbToOklab(r,g,b);
+    const L = q[0];
+    const a = q[1];
+    const bb = q[2];
+
+    const neutral = neutralClass(
+      originalL,
+      originalA,
+      originalBOK
+    );
+
+    let best = 0;
+    let bestCost = Infinity;
+
+    for(let k=0;k<4;k++){
+      if(!allowedByNeutral(k,neutral,originalL)){
+        continue;
+      }
+
+      const t = QUANT_OK[k];
+
+      const dl = L-t[0];
+      const da = a-t[1];
+      const db = bb-t[2];
+
+      let cost =
+        dl*dl +
+        da*da +
+        db*db;
+
+      /*
+        使用原始像素做颜色语义判断，
+        防止误差扩散把灰色“染成红色”后再反过来影响候选。
+      */
+      cost += colorBiasCost(
+        k,
+        originalL,
+        originalA,
+        originalBOK,
+        originalR,
+        originalG,
+        originalB
+      );
+
+      /*
+        近中性像素对红/黄再加一道小惩罚。
+      */
+      if(neutral === 1 && (k === 2 || k === 3)){
+        cost += 0.0035;
+      }
+
+      /*
+        极端暗部优先黑，极端高光优先白。
+        只在亮度极端时启用，不影响正常彩色区域。
+      */
+      if(originalL < 0.14 && k !== 0){
+        cost += 0.005;
+      }
+
+      if(originalL > 0.965 && k !== 1){
+        cost += 0.004;
+      }
+
+      if(cost < bestCost){
+        bestCost = cost;
+        best = k;
+      }
+    }
+
+    return best;
+  }
+
+  for(let y=0;y<SH;y++){
+    const rtl = diffMode && (y & 1);
+
+    /*
+      对于每一行：
+      currentErr 保存原始像素 + 来自上一行的误差。
+    */
+    for(let n=0;n<SW;n++){
+      const x = rtl ? SW-1-n : n;
+      const idx = y*SW+x;
+      const p4 = idx*4;
+
+      const originalR = px[p4];
+      const originalG = px[p4+1];
+      const originalB = px[p4+2];
+
+      const li = idx*3;
+      const originalL = first.lab[li];
+      const originalA = first.lab[li+1];
+      const originalBOK = first.lab[li+2];
+
+      let r,g,b;
+
+      if(diffMode){
+        const ei = x*3;
+
+        // Floyd-Steinberg / Atkinson：原图 + 已传播误差
+        r = clamp8(originalR + currentErr[ei]);
+        g = clamp8(originalG + currentErr[ei+1]);
+        b = clamp8(originalB + currentErr[ei+2]);
+      }else{
+        r = originalR;
+        g = originalG;
+        b = originalB;
+
+        if(mode === 'bayer'){
+          /*
+            比之前更弱的 Bayer：
+            ±18 左右，避免彩色边缘过度扰动。
+          */
+          const t =
+            (BAYER8[y&7][x&7] + 0.5) / 64 - 0.5;
+
+          const d = t * 36;
+
+          r = clamp8(r+d);
+          g = clamp8(g+d);
+          b = clamp8(b+d);
+        }
+      }
+
+      const k = candidateIndex(
+        r,g,b,
+        originalR,originalG,originalB,
+        originalL,originalA,originalBOK
+      );
+
+      const outRgb = QUANT_RGB[k];
+
+      /*
+        浏览器预览使用 DISPLAY_PAL，
+        但 packedBuf 永远只写颜色索引。
+      */
+      const displayRgb = hexToRgb(DISPLAY_PAL[k]);
+
+      oc[p4]   = displayRgb[0];
+      oc[p4+1] = displayRgb[1];
+      oc[p4+2] = displayRgb[2];
+      oc[p4+3] = 255;
+
+      /*
+        设备帧缓冲：
+        画布 x -> 设备行
+        画布 y -> 设备列反向
+      */
+      const dx = (SH-1)-y;
+      const byteI = x*ROW_BYTES + (dx>>2);
+      const shift = 6 - ((dx&3)<<1);
+
+      packedBuf[byteI] |= CODES[k] << shift;
+
+      if(diffMode){
+        const er = r - outRgb[0];
+        const eg = g - outRgb[1];
+        const eb = b - outRgb[2];
+
+        const diffusion = buildDiffusionWeights(
+          kernel,
+          x,
+          y,
+          rtl,
+          edgeR,
+          edgeD
+        );
+
+        for(const item of diffusion){
+          const nx = item.nx;
+          const ny = item.ny;
+          const ox = item.ox;
+          const oy = item.oy;
+          const factor = item.weight;
+          const ei = nx*3;
+
+          if(oy === 0){
+            currentErr[ei]   += er*factor;
+            currentErr[ei+1] += eg*factor;
+            currentErr[ei+2] += eb*factor;
+          }else{
+            nextErr[ei]   += er*factor;
+            nextErr[ei+1] += eg*factor;
+            nextErr[ei+2] += eb*factor;
+          }
+        }
+      }
+    }
+
+    if(diffMode && y+1<SH){
+      /*
+        下一行成为 current。
+        旧 current 清空后作为新的 next。
+      */
+      const tmp = currentErr;
+      currentErr = nextErr;
+      nextErr = tmp;
+      nextErr.fill(0);
+    }
+  }
+
+  quantCache.getContext('2d').putImageData(out,0,0);
+  quantCacheOK.v = true;
+  return packedBuf;
+}
+
+/* ============================================================
+   文件处理
+   ============================================================ */
+
+function process(){
+  perr.textContent = '';
+
+  if(!srcImage) return;
+
+  try{
+    prepareSrcCache(srcImage);
+    const work = drawToWork();
+    packed = quantizeTo2bpp(work);
+
+    preview.style.display = 'block';
+    renderPreview();
+    syncPosUI();
+    $('upbtn').disabled = false;
+  }catch(e){
+    packed = null;
+    $('upbtn').disabled = true;
+    perr.textContent = '处理失败：' + e.message;
+    console.error(e);
+  }
+}
+
+/*
+  把 quantCache（已量化的 552×768 画布）按当前偏移
+  绘制到 preview。
+
+  只做一次 drawImage，~1ms。拖动期间用这个。
+  不会重新量化，因此 imgOffsetX/Y 变化时不需要打包。
+*/
+function renderPreview(){
+  if(!quantCacheOK.v) return;
+
+  const pc = preview.getContext('2d');
+  pc.fillStyle = '#ffffff';
+  pc.fillRect(0,0,SW,SH);
+
+  const ox = imgOffsetX|0;
+  const oy = imgOffsetY|0;
+
+  const srcX = ox < 0 ? -ox : 0;
+  const srcY = oy < 0 ? -oy : 0;
+  const dstX = Math.max(0, ox);
+  const dstY = Math.max(0, oy);
+  const srcW = Math.max(0, Math.min(SW - srcX, SW - dstX));
+  const srcH = Math.max(0, Math.min(SH - srcY, SH - dstY));
+
+  if(srcW > 0 && srcH > 0){
+    pc.drawImage(
+      quantCache,
+      srcX, srcY, srcW, srcH,
+      dstX, dstY, srcW, srcH
+    );
+  }
+}
+
+function loadFile(file){
+  const allowed = [
+    'image/jpeg',
+    'image/png',
+    'image/webp'
+  ];
+
+  if(!file || !allowed.includes(file.type)){
+    perr.textContent = '请选择 JPG / PNG / WebP 图片';
+    return;
+  }
+
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+
+  img.onload = () => {
+    srcImage = img;
+    imgOffsetX = 0;
+    imgOffsetY = 0;
+
+    const base =
+      (file.name || '').replace(/\.[^.]+$/,'');
+
+    if(!$('iname').value){
+      $('iname').value = base.slice(0,48);
+    }
+
+    process();
+    URL.revokeObjectURL(url);
+  };
+
+  img.onerror = () => {
+    perr.textContent = '图片解码失败';
+    URL.revokeObjectURL(url);
+  };
+
+  img.src = url;
+}
+
+/* ============================================================
+   UI
+   ============================================================ */
+
+drop.addEventListener('click',() => fileIn.click());
+
+fileIn.addEventListener('change',() => {
+  loadFile(fileIn.files[0]);
+});
+
+['dragover','dragenter'].forEach(ev => {
+  drop.addEventListener(ev,e => {
+    e.preventDefault();
+    drop.classList.add('hover');
+  });
+});
+
+['dragleave','dragend'].forEach(ev => {
+  drop.addEventListener(ev,() => {
+    drop.classList.remove('hover');
+  });
+});
+
+drop.addEventListener('drop',e => {
+  e.preventDefault();
+  drop.classList.remove('hover');
+  loadFile(e.dataTransfer.files[0]);
+});
+
+$('rot').addEventListener('change',process);
+$('fit').addEventListener('change',process);
+$('dmode').addEventListener('change',process);
+$('sharpen').addEventListener('change',process);
+$('vivid').addEventListener('change',process);
+
+/* ============================================================
+   拖动预览调整图片位置
+   ------------------------------------------------------------
+   canvas 内部分辨率是 552×768，显示尺寸由 CSS 缩放。
+   需要把屏幕像素位移换算为设备像素位移。
+   ============================================================ */
+
+(function setupDrag(){
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+  let baseX = 0;
+  let baseY = 0;
+  let rafId = 0;
+
+  function pointerXY(e){
+    const r = preview.getBoundingClientRect();
+    const cx = e.touches ? e.touches[0].clientX : e.clientX;
+    const cy = e.touches ? e.touches[0].clientY : e.clientY;
+    return {x: cx, y: cy, rect: r};
+  }
+
+  function applyMove(clientX, clientY){
+    const r = preview.getBoundingClientRect();
+
+    /* 屏幕像素 -> 设备像素 */
+    const sx = SW / r.width;
+    const sy = SH / r.height;
+
+    imgOffsetX = baseX + (clientX - startX) * sx;
+    imgOffsetY = baseY + (clientY - startY) * sy;
+    clampOffset();
+    syncPosUI();
+
+    /*
+      拖动期间只重画预览，不重新量化。
+      用 rAF 把同一帧内的多次 move 合并成一次渲染。
+    */
+    if(!rafId){
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        renderPreview();
+      });
+    }
+  }
+
+  function onDown(e){
+    if(preview.style.display === 'none') return;
+    if(!srcImage) return;
+    if(e.button !== undefined && e.button !== 0) return;
+
+    dragging = true;
+    preview.classList.add('dragging');
+
+    const p = pointerXY(e);
+    startX = p.x;
+    startY = p.y;
+    baseX = imgOffsetX;
+    baseY = imgOffsetY;
+
+    try { preview.setPointerCapture(e.pointerId); } catch(_){}
+    e.preventDefault();
+  }
+
+  function onMove(e){
+    if(!dragging) return;
+    applyMove(e.clientX, e.clientY);
+    e.preventDefault();
+  }
+
+  function onUp(e){
+    if(!dragging) return;
+    dragging = false;
+    preview.classList.remove('dragging');
+
+    if(rafId){
+      cancelAnimationFrame(rafId);
+      rafId = 0;
+    }
+
+    try {
+      if(e && e.pointerId !== undefined){
+        preview.releasePointerCapture(e.pointerId);
+      }
+    }catch(_){}
+
+    /*
+      松手后再做一次完整 process()：
+      1. 把当前偏移重新打包进上传数据
+      2. 更新 quantCache，让后续拖动也基于最新源
+    */
+    process();
+  }
+
+  preview.addEventListener('pointerdown', onDown);
+  preview.addEventListener('pointermove', onMove);
+  preview.addEventListener('pointerup', onUp);
+  preview.addEventListener('pointercancel', onUp);
+  preview.addEventListener('pointerleave', onUp);
+})();
+
+$('posreset').addEventListener('click',() => {
+  imgOffsetX = 0;
+  imgOffsetY = 0;
+  syncPosUI();
+  process();
+});
+
+/* ============================================================
+   显示色板
+   ============================================================ */
+
+function syncDisplayPal(){
+  DISPLAY_PAL.forEach((h,i) => {
+    $('sw'+i).style.background = h;
+    $('pc'+i).value = h;
+  });
+}
+
+syncDisplayPal();
+
+for(let i=0;i<4;i++){
+  $('pc'+i).addEventListener('change',e => {
+    DISPLAY_PAL[i] = e.target.value;
+
+    try{
+      localStorage.setItem(
+        DISPLAY_PAL_KEY,
+        JSON.stringify(DISPLAY_PAL)
+      );
+    }catch(_){}
+
+    syncDisplayPal();
+
+    /*
+      只改变预览色，因此重新处理即可。
+      packed 数据中的颜色索引不改变。
+    */
+    process();
+  });
+}
+
+$('calreset').addEventListener('click',() => {
+  DISPLAY_PAL = DISPLAY_PAL_DEFAULT.slice();
+
+  try{
+    localStorage.removeItem(DISPLAY_PAL_KEY);
+  }catch(_){}
+
+  syncDisplayPal();
+  process();
+  toast('已恢复默认显示色板');
+});
+
+$('calshot').addEventListener('click',() => {
+  const c = document.createElement('canvas');
+  c.width = SW;
+  c.height = SH;
+
+  const x = c.getContext('2d');
+
+  /*
+    校准图使用理想四色。
+    这样不会把实测显示色再次作为量化目标。
+  */
+  QUANT_PAL.forEach((h,i) => {
+    x.fillStyle = h;
+    x.fillRect(
+      0,
+      Math.round(i*SH/4),
+      SW,
+      Math.round(SH/4)
+    );
+  });
+
+  const a = document.createElement('a');
+  a.href = c.toDataURL('image/png');
+  a.download = 'colorink_palette_calibration.png';
+  a.click();
+
+  toast(
+    '校准图已下载：上传到屏幕后拍照取四个色块 RGB',
+    7000
+  );
+});
+
+/* ============================================================
+   上传
+   ============================================================ */
+
+$('upbtn').addEventListener('click',async() => {
+  if(!packed) return;
+
+  $('upbtn').disabled = true;
+  perr.textContent = '';
+
+  try{
+    const fd = new FormData();
+
+    fd.append(
+      'name',
+      $('iname').value || 'image'
+    );
+
+    fd.append(
+      'file',
+      new Blob(
+        [packed.buffer],
+        {type:'application/octet-stream'}
+      ),
+      'frame.raw'
+    );
+
+    toast('上传中…');
+
+    const r = await fetch('/api/image',{
+      method:'POST',
+      body:fd
+    });
+
+    if(!r.ok){
+      throw new Error('HTTP ' + r.status);
+    }
+
+    const j = await r.json();
+
+    if(!j.ok){
+      throw new Error(j.msg || '上传失败');
+    }
+
+    toast(
+      '上传成功，屏幕刷新中（约 16 秒）…',
+      8000
+    );
+
+    await loadImages();
+    await loadStatus();
+
+    const d = await fetch(
+      '/api/display?id=' + encodeURIComponent(j.id),
+      {method:'POST'}
+    );
+
+    if(!d.ok){
+      throw new Error('显示请求 HTTP ' + d.status);
+    }
+
+    const dj = await d.json();
+
+    if(!dj.ok){
+      throw new Error(
+        dj.msg || '显示请求失败'
+      );
+    }
+
+    await sleep(16000);
+
+    await loadImages();
+    await loadStatus();
+
+    toast('完成');
+
+  }catch(e){
+    perr.textContent = '上传失败：' + e.message;
+    toast('上传失败',4000);
+  }finally{
+    $('upbtn').disabled = !packed;
+  }
+});
+
+/* ============================================================
+   图库
+   ============================================================ */
+
+function esc(s){
+  const d = document.createElement('span');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
+
+function fmtKB(n){
+  return (Number(n || 0)/1024).toFixed(0) + ' KB';
+}
+
+async function loadImages(){
+  try{
+    const r = await fetch('/api/images');
+
+    if(!r.ok){
+      throw new Error('HTTP ' + r.status);
+    }
+
+    const j = await r.json();
+    const ul = $('imglist');
+
+    if(!j.images || !j.images.length){
+      ul.innerHTML =
+        '<li class="empty">还没有图片，上传一张试试</li>';
+      return;
+    }
+
+    ul.innerHTML = j.images.map(im =>
+      `<li>
+        <span class="nm">${esc(im.name)}</span>
+        <span class="meta">${fmtKB(im.size)}</span>
+        ${im.current
+          ? '<span class="cur">屏幕显示中</span>'
+          : ''}
+        <button class="sm ${im.current?'ghost':''}"
+                data-show="${Number(im.id)}">显示</button>
+        <button class="sm danger"
+                data-del="${Number(im.id)}">删除</button>
+      </li>`
+    ).join('');
+
+    ul.querySelectorAll('[data-show]')
+      .forEach(b => b.addEventListener(
+        'click',
+        () => showImage(Number(b.dataset.show))
+      ));
+
+    ul.querySelectorAll('[data-del]')
+      .forEach(b => b.addEventListener(
+        'click',
+        () => delImage(Number(b.dataset.del))
+      ));
+
+  }catch(e){
+    $('imglist').innerHTML =
+      '<li class="empty">加载失败：' +
+      esc(e.message) +
+      '</li>';
+  }
+}
+
+async function showImage(id){
+  toast(
+    '屏幕刷新中（约 16 秒）…',
+    8000
+  );
+
+  try{
+    const r = await fetch(
+      '/api/display?id=' + encodeURIComponent(id),
+      {method:'POST'}
+    );
+
+    if(!r.ok){
+      throw new Error('HTTP ' + r.status);
+    }
+
+    const j = await r.json();
+
+    if(!j.ok){
+      throw new Error(j.msg || '显示失败');
+    }
+
+  }catch(e){
+    toast('请求失败：' + e.message,5000);
+    return;
+  }
+
+  await sleep(16000);
+  await loadImages();
+  await loadStatus();
+
+  toast('完成');
+}
+
+async function delImage(id){
+  if(!confirm('确定删除这张图片？')) return;
+
+  try{
+    const r = await fetch(
+      '/api/image?id=' + encodeURIComponent(id),
+      {method:'DELETE'}
+    );
+
+    if(!r.ok){
+      throw new Error('HTTP ' + r.status);
+    }
+
+    const j = await r.json();
+
+    if(!j.ok){
+      throw new Error(j.msg || '删除失败');
+    }
+
+    toast('已删除');
+
+  }catch(e){
+    toast('删除失败：' + e.message,5000);
+  }
+
+  await loadImages();
+  await loadStatus();
+}
+
+$('clearbtn').addEventListener('click',async() => {
+  toast(
+    '屏幕清空中（约 16 秒）…',
+    8000
+  );
+
+  await fetch(
+    '/api/clear',
+    {method:'POST'}
+  ).catch(() => {});
+
+  await sleep(16000);
+
+  await loadImages();
+  await loadStatus();
+});
+
+$('refresh').addEventListener('click',async() => {
+  await loadImages();
+  await loadStatus();
+});
+
+$('portalbtn').addEventListener('click',async() => {
+  if(!confirm(
+    '设备将重启进入配网模式（热点 ColorInk-XXXX），确定？'
+  )) return;
+
+  await fetch(
+    '/restart',
+    {method:'POST'}
+  ).catch(() => {});
+
+  toast('设备正在重启…');
+});
+
+async function loadStatus(){
+  try{
+    const r = await fetch('/api/status');
+
+    if(!r.ok) return;
+
+    const j = await r.json();
+
+    $('stat').innerHTML =
+      `<span>IP <b>${esc(j.ip)}</b></span>` +
+      `<span>WiFi <b>${esc(j.ssid)}</b> (${esc(j.rssi)}dBm)</span>` +
+      `<span>电池 <b>${esc(j.battery)}</b></span>` +
+      `<span>存储 <b>${(Number(j.free_fs||0)/1024).toFixed(0)} KB</b> 可用</span>` +
+      `<span>内存 <b>${(Number(j.heap||0)/1024).toFixed(0)} KB</b> 空闲 · 最低 ${(Number(j.minheap||0)/1024).toFixed(0)} KB · 最大块 ${(Number(j.maxalloc||0)/1024).toFixed(0)} KB</span>`;
+  }catch(_){}
+}
+
+loadImages();
+loadStatus();
+</script>
+</body>
+</html>
