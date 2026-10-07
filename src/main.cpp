@@ -5,17 +5,26 @@
 //       The panel is repainted only on a web-page action (display / clear).
 // Button: short press = next image, long press (2s) = provisioning portal.
 // No cloud services: all previous remote API / OTA / AI-voice code removed.
+//
+// 两套固件，编译期二选一（见 platformio.ini）：
+//   * 默认（WiFi）：STA 模式自带 http 网页，浏览器直传图片。走这个文件的下半段。
+//   * -DINKSIGHT_BLE：完全不启动 WiFi，只跑 NimBLE；上位机是托管在 HTTPS 的
+//     静态页 web/ble_test.html，用 Web Bluetooth 直连。网络相关的代码全部编译掉。
 
 #include <Arduino.h>
-#include <WiFi.h>
-#include "esp_adc_cal.h"
 
 #include "config.h"
 #include "storage.h"
-#include "portal.h"
-#include "webapp.h"
 #include "gallery.h"
 #include "epd_driver.h"
+
+#ifdef INKSIGHT_BLE
+#include "ble_service.h"
+#else
+#include <WiFi.h>
+#include "portal.h"
+#include "webapp.h"
+#endif
 
 // ── Shared framebuffers (referenced by other modules via extern) ──
 uint8_t imgBuf[IMG_BUF_LEN];
@@ -50,10 +59,17 @@ void freeColorBuf()
 
 void netServicePump()
 {
+#ifdef INKSIGHT_BLE
+    // 蓝牙固件没有网页/配网服务，但要在这里把 GATT 回包发出去：epd_driver 的
+    // 刷新等待（~15s）里会无条件调用本函数，不泵的话页面在刷新期间收不到
+    // display:done，只能干等到超时。
+    blePumpReplies();
+#else
     if (portalActive)
         handlePortalClients();
     else if (webappRunning())
         webappHandle();
+#endif
 }
 
 // ── Battery voltage ─────────────────────────────────────────
@@ -86,19 +102,8 @@ float readBatteryVoltage()
         sum += readings[i];
 
     float avgRaw = (float)sum / (SAMPLES - 2 * DISCARD);
-#if defined(BOARD_PROFILE_ESP32_C3_WROOM02) || defined(BOARD_PROFILE_SMT_WROOM32E)
-    static esp_adc_cal_characteristics_t adcChars;
-    static bool calibrated = false;
-    if (!calibrated)
-    {
-        esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_12, ADC_WIDTH_BIT_12, 1100, &adcChars);
-        calibrated = true;
-    }
-    uint32_t mv = esp_adc_cal_raw_to_voltage((uint32_t)avgRaw, &adcChars);
-    float realBatteryVoltage = (mv / 1000.0f) * 2.0f; // R1=10k, R2=10k
-#else
+    // R1=10k / R2=10k 分压，所以实测电压是引脚读数的两倍
     float realBatteryVoltage = avgRaw * (3.3f / 4095.0f) * 2.0f;
-#endif
     Serial.printf("[BAT] raw=%.1f vbat=%.2fV\n", avgRaw, realBatteryVoltage);
     return realBatteryVoltage;
 }
@@ -116,6 +121,9 @@ static void ledInit()
 #endif
 }
 
+// LED 反馈语义只属于 WiFi 固件：BLE 固件里 LED 由 bleModeLoop 驱动
+// （慢闪 = 广播中 / 常亮 = 已连接），两边同时写会打架。
+#ifndef INKSIGHT_BLE
 static void ledFeedback(const char *pattern)
 {
 #if PIN_LED < 0
@@ -142,9 +150,12 @@ static void ledFeedback(const char *pattern)
     }
 #endif
 }
+#endif // !INKSIGHT_BLE
 
 // ── Portal mode ─────────────────────────────────────────────
 
+#ifndef INKSIGHT_BLE
+// 配网热点和 WiFi 看门狗只在 WiFi 固件里存在：蓝牙固件全程不碰射频的 WiFi 侧。
 enum class PortalEntryReason : uint8_t
 {
     MANUAL,
@@ -202,9 +213,11 @@ static void checkPortalTimeout()
     delay(200);
     ESP.restart();
 }
+#endif // !INKSIGHT_BLE
 
 // ── WiFi watchdog (server mode) ─────────────────────────────
 
+#ifndef INKSIGHT_BLE
 static unsigned long wifiDownSince = 0;
 static unsigned long lastReconnectAttempt = 0;
 static int reconnectFails = 0;
@@ -236,6 +249,7 @@ static void handleWiFiWatchdog()
         enterPortalMode(PortalEntryReason::AUTO_WIFI_FAILURE);
     }
 }
+#endif // !INKSIGHT_BLE
 
 // ── Button ──────────────────────────────────────────────────
 
@@ -256,8 +270,15 @@ static void handleButton()
         if (millis() - pressStart >= (unsigned long)CFG_BTN_HOLD_MS)
         {
             pressed = false;
+#ifdef INKSIGHT_BLE
+            // 这颗板子只有一个按键（GPIO9，即 BOOT 键），长按留给"强制释放 BLE
+            // 连接"这个兜底：手机端卡死时设备端否则没辙。LED 由 bleModeLoop 驱动，
+            // 这里不碰它，免得和状态闪烁打架。
+            bleForceDisconnect();
+#else
             ledFeedback("off");
             enterPortalMode(PortalEntryReason::MANUAL);
+#endif
         }
         return;
     }
@@ -267,6 +288,11 @@ static void handleButton()
         unsigned long dur = millis() - pressStart;
         if (dur >= (unsigned long)SHORT_PRESS_MIN_MS && dur < (unsigned long)CFG_BTN_HOLD_MS)
         {
+#ifdef INKSIGHT_BLE
+            // BLE 固件里按键不主动刷屏：一次刷新要阻塞 ~15s，期间 loop() 停转、
+            // notify 发不出去，正在传图的链路会被拖成假死。刷屏只由 BLE 命令触发。
+            Serial.println("[BTN] short press ignored (刷新只由 BLE 命令触发)");
+#else
             if (galleryCount() > 0)
             {
                 galleryCycle(1); // short press: next image (blocks ~15s)
@@ -275,6 +301,7 @@ static void handleButton()
             {
                 ledFeedback("ack");
             }
+#endif
         }
     }
 }
@@ -325,6 +352,15 @@ void setup()
     // malloc（上传过图片后堆碎片化，运行期大分配可能失败 → 刷新静默失效）。
     ensureColorBuf();
 
+#ifdef INKSIGHT_BLE
+    // 蓝牙固件：WiFi 一次都不启动（WiFi.mode / WiFi.begin 全程不调用），
+    // 射频只服务 NimBLE，避开 C3 单天线的 WiFi/BLE 共存降速与发热。
+    Serial.println("[BOOT] BLE-only build: WiFi stays off");
+    bleModeStart();
+    Serial.printf("[BOOT] ready t=%lums heap=%u\n",
+                  millis() - bootT0, (unsigned)ESP.getFreeHeap());
+    return;
+#else
     bool btnHeld = digitalRead(PIN_CFG_BTN) == LOW;
 
     if (!btnHeld && getWiFiCount() > 0)
@@ -349,10 +385,18 @@ void setup()
     }
     enterPortalMode(btnHeld ? PortalEntryReason::MANUAL
                             : PortalEntryReason::AUTO_WIFI_FAILURE);
+#endif // INKSIGHT_BLE
 }
 
 void loop()
 {
+#ifdef INKSIGHT_BLE
+    bleModeLoop(); // 把 GATT 回调排队的回包发出去
+    handleButton();
+    logHeap();
+    delay(2); // C3 单核：让出 CPU 给 idle 和 NimBLE 主机任务
+    return;
+#else
     if (portalActive)
     {
         handlePortalClients();
@@ -371,4 +415,5 @@ void loop()
     // 对 HTTP 几乎无影响（lwIP 收包由协议栈自己完成，这里只是搬运速度），
     // 上传 106KB 也仅多花百毫秒级。
     delay(2);
+#endif // INKSIGHT_BLE
 }

@@ -3,17 +3,9 @@
 
 #include <Arduino.h>
 
-#if defined(BOARD_PROFILE_ESP32_C3)
-#define PIN_EPD_MOSI   6
-#define PIN_EPD_SCK    4
-#define PIN_EPD_CS     7
-#define PIN_EPD_DC     1
-#define PIN_EPD_RST    2
-#define PIN_EPD_BUSY   10
-#define PIN_BAT_ADC    0
-#define PIN_CFG_BTN    9
-#define PIN_LED        3
-#elif defined(BOARD_PROFILE_ESP32_C3_HUAWEI)
+// 只支持这一块板子：ESP32-C3 SuperMini 飞线华为 3.98" 手机壳屏。
+// platformio.ini 里所有环境都定义 BOARD_PROFILE_ESP32_C3_HUAWEI。
+#if defined(BOARD_PROFILE_ESP32_C3_HUAWEI)
 // 华为 3.98" 768x552 JD79665 手机壳屏（原装小板飞线接线）
 #define PIN_EPD_MOSI 6 // DIN
 #define PIN_EPD_SCK 4  // CLK
@@ -24,63 +16,8 @@
 #define PIN_BAT_ADC 0
 #define PIN_CFG_BTN 9
 #define PIN_LED 3
-#elif defined(BOARD_PROFILE_ESP32_C3_WROOM02)
-#define PIN_EPD_MOSI   6
-#define PIN_EPD_SCK    4
-#define PIN_EPD_CS     7
-#define PIN_EPD_DC     1
-#define PIN_EPD_RST    2
-#define PIN_EPD_BUSY   10
-#define PIN_BAT_ADC    0
-#define PIN_CFG_BTN    9
-#define PIN_LED        5
-#elif defined(BOARD_PROFILE_ESP32_WROOM32E)
-#define PIN_EPD_MOSI   14
-#define PIN_EPD_SCK    13
-#define PIN_EPD_CS     15
-#define PIN_EPD_DC     27
-#define PIN_EPD_RST    26
-#define PIN_EPD_BUSY   25
-#define PIN_BAT_ADC    35
-#define PIN_CFG_BTN    0
-#define PIN_LED        2
-#define BOARD_HAS_AUDIO
-#elif defined(BOARD_PROFILE_SMT_WROOM32E)
-#define PIN_EPD_MOSI   14
-#define PIN_EPD_SCK    13
-#define PIN_EPD_CS     15
-#define PIN_EPD_DC     27
-#define PIN_EPD_RST    26
-#define PIN_EPD_BUSY   25
-#define PIN_BAT_ADC    35
-#define PIN_CFG_BTN    0
-#define PIN_LED        2
-#define BOARD_HAS_AUDIO
-#elif defined(BOARD_PROFILE_SMT_C3)
-#define PIN_EPD_MOSI   6
-#define PIN_EPD_SCK    4
-#define PIN_EPD_CS     7
-#define PIN_EPD_DC     1
-#define PIN_EPD_RST    2
-#define PIN_EPD_BUSY   10
-#define PIN_BAT_ADC    0
-#ifndef PIN_CFG_BTN
-#define PIN_CFG_BTN    9
-#endif
-#define PIN_LED        5
-#elif defined(BOARD_PROFILE_YD_ESP32_S3_N16R8)
-#define PIN_EPD_MOSI   11
-#define PIN_EPD_SCK    12
-#define PIN_EPD_CS     10
-#define PIN_EPD_DC     9
-#define PIN_EPD_RST    8
-#define PIN_EPD_BUSY   7
-#define PIN_BAT_ADC    4
-#define PIN_CFG_BTN    0
-#define PIN_LED        -1
-#define PIN_RGB_LED    48
 #else
-#error "Unsupported board profile"
+#error "Unsupported board profile. Define BOARD_PROFILE_ESP32_C3_HUAWEI"
 #endif
 
 #ifndef PIN_RGB_LED
@@ -88,18 +25,13 @@
 #endif
 
 // ── Display constants ────────────────────────────────────────
-// Default for 4.2" E-Paper (400x300, 1-bit).
-// Override via build flags: -D EPD_WIDTH=800 -D EPD_HEIGHT=480
-// Supported configurations:
-//   4.2"  (400x300) - default
-//   2.9"  (296x128)
-//   5.83" (648x480)
-//   7.5"  (800x480)
+// 面板固定 768x552 四色（2bpp）。platformio.ini 里仍显式传 -DEPD_WIDTH/HEIGHT，
+// 这里保留同名默认值，只为漏传时不至于编到错的尺寸。
 #ifndef EPD_WIDTH
-#define EPD_WIDTH  400
+#define EPD_WIDTH 768
 #endif
 #ifndef EPD_HEIGHT
-#define EPD_HEIGHT 300
+#define EPD_HEIGHT 552
 #endif
 
 static const int W = EPD_WIDTH;
@@ -127,9 +59,6 @@ void freeColorBuf();
 // Shared helper (defined in main.cpp)
 float readBatteryVoltage();
 
-// ── Refresh strategy ─────────────────────────────────────────
-static const int FULL_REFRESH_INTERVAL = 10;  // Full refresh every N updates to clear ghosting
-
 // ── Config defaults ─────────────────────────────────────────
 static const int   WIFI_TIMEOUT    = 15000;   // ms (portal: single explicit connect)
 static const int   MAX_WIFI_NETWORKS = 5;     // Max saved WiFi credentials (tried in order on boot)
@@ -142,11 +71,5 @@ static const int   SHORT_PRESS_MIN_MS = 50;   // Minimum short press duration (d
 static const int   LIVE_WIFI_RETRY_MS = 5000; // Retry interval when WiFi is disconnected
 static const unsigned long PORTAL_AUTO_TIMEOUT_MS = 3UL * 60UL * 1000UL;
 static const unsigned long PORTAL_MANUAL_TIMEOUT_MS = 10UL * 60UL * 1000UL;
-// WiFi -> captive portal fallback: when ALL saved networks fail to connect,
-// do this many quick in-place retry sweeps (no reboot) before opening the AP.
-// Keeps the portal fast to appear (user is likely waiting to reconfigure)
-// while still riding out a brief blip such as a router rebooting.
-static const int           WIFI_PORTAL_RETRY_SWEEPS   = 1;
-static const unsigned long WIFI_PORTAL_RETRY_DELAY_MS = 3000;
 
 #endif // INKSIGHT_CONFIG_H
