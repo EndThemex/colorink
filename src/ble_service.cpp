@@ -11,12 +11,12 @@
 // ── UUID ────────────────────────────────────────────────────
 // 自定义 128 位 UUID。Web Bluetooth 侧靠 requestDevice 的 optionalServices
 // 授权访问，不强求它出现在广播包里。
-static const char *SVC_UUID  = "8e7a0001-9f3b-4b1e-8a55-1a2b3c4d5e6f";
-static const char *CMD_UUID  = "8e7a0002-9f3b-4b1e-8a55-1a2b3c4d5e6f";
+static const char *SVC_UUID = "8e7a0001-9f3b-4b1e-8a55-1a2b3c4d5e6f";
+static const char *CMD_UUID = "8e7a0002-9f3b-4b1e-8a55-1a2b3c4d5e6f";
 static const char *DATA_UUID = "8e7a0003-9f3b-4b1e-8a55-1a2b3c4d5e6f";
 static const char *STAT_UUID = "8e7a0004-9f3b-4b1e-8a55-1a2b3c4d5e6f";
 
-static const uint32_t ACK_STEP = 8192;  // 每收到这么多字节回一次流控确认
+static const uint32_t ACK_STEP = 8192; // 每收到这么多字节回一次流控确认
 
 // ── 传输统计 ────────────────────────────────────────────────
 // begin / reset 时清零：ack 从 0 重新计数，stats 里的校验和也对应当前这一次
@@ -28,7 +28,7 @@ static uint32_t adlerA = 1, adlerB = 0; // Adler-32 累加器，初值 a=1 / b=0
 
 static volatile bool uploading = false; // 是否处于 begin..end 之间
 
-static uint16_t connMtu = 23;           // 协商后的 ATT MTU（默认 23，未协商前）
+static uint16_t connMtu = 23; // 协商后的 ATT MTU（默认 23，未协商前）
 static uint16_t clientConnHandle = 0xFFFF;
 static volatile bool clientConnected = false;
 
@@ -63,11 +63,11 @@ static void queueReply(const char *fmt, ...)
 // 都留给主循环（blePumpReplies）做——LittleFS 目录扫描是阻塞操作，不该放在
 // NimBLE 主机任务里。
 static volatile bool listRequested = false;
-static bool listPumping = false;        // 分片发送进行中（主循环私有）
-static char listBuf[1600];              // 列表 JSON 快照
+static bool listPumping = false; // 分片发送进行中（主循环私有）
+static char listBuf[1600];       // 列表 JSON 快照
 static size_t listLen = 0;
 static size_t listSent = 0;
-static uint8_t chunkOut[544];           // 一条通知的组包缓冲
+static uint8_t chunkOut[544]; // 一条通知的组包缓冲
 
 // 排队的刷屏/清屏：绝不在 GATT 回调里执行（一次刷新阻塞 ~15s，会卡死链路）
 static volatile int pendingDisplayId = -1;
@@ -91,9 +91,11 @@ static void adlerUpdate(const uint8_t *buf, size_t len)
     for (size_t i = 0; i < len; i++)
     {
         a += buf[i];
-        if (a >= 65521) a -= 65521;   // a < 65521 + 255，一次减法足够
+        if (a >= 65521)
+            a -= 65521; // a < 65521 + 255，一次减法足够
         b += a;
-        if (b >= 65521) b -= 65521;   // b < 2 * 65521，一次减法足够
+        if (b >= 65521)
+            b -= 65521; // b < 2 * 65521，一次减法足够
     }
     adlerA = a;
     adlerB = b;
@@ -380,6 +382,13 @@ bool bleModeStart()
     adv->addServiceUUID(SVC_UUID);
     adv->setName(name);
     adv->setScanResponse(true); // 名字 + UUID 放不进 31 字节的广播包，靠扫描响应补
+
+    // 空闲广播间隔 500~1000ms：BLE 常供电待机电流主要花在每次广播事件的射频
+    // 唤醒上，把间隔从默认的几十 ms 拉到秒级，待机功耗降一个量级。
+    // 代价是 Web Bluetooth 扫描时设备晚一两秒才出现，页面侧感知不明显。
+    adv->setMinInterval(500);
+    adv->setMaxInterval(1000);
+
     NimBLEDevice::startAdvertising();
 
     Serial.printf("[BLE] service up, name='%s'  MTU target=517  t=%lums\n",
@@ -471,6 +480,16 @@ void blePumpReplies()
         sendToClient((const uint8_t *)msg, strnlen(msg, sizeof(msg)));
 }
 
+// 主循环是否正忙：有待发回包/列表分片/排队刷屏，或上传进行中。
+// 没有连接时恒为 false——回包只发给已连接的客户端，此时 loop 可以放心慢转。
+bool bleModeBusy()
+{
+    if (!clientConnected)
+        return false;
+    return uploading || listRequested || listPumping ||
+           pendingDisplayId >= 0 || pendingClear || replyReady;
+}
+
 void bleModeLoop()
 {
     // 先把回包发出去（含 display:queued / clear:queued），再执行刷屏
@@ -523,11 +542,25 @@ void bleModeLoop()
             ledOn = true;
         }
     }
-    else if (now - lastBlink >= 500UL) // 1Hz
+    else
     {
-        ledOn = !ledOn;
-        digitalWrite(PIN_LED, ledOn ? HIGH : LOW);
-        lastBlink = now;
+        // 广播态 LED 用 3 秒一次的 50ms 短闪当心跳：占空比从 1Hz 方波的 50%
+        // 降到 ~1.7%，待机 LED 电流几乎可以忽略，同时灯还保留"设备活着、
+        // 在等人连"的语义。
+        if (!ledOn)
+        {
+            if (now - lastBlink >= 3000UL)
+            {
+                digitalWrite(PIN_LED, HIGH);
+                ledOn = true;
+                lastBlink = now;
+            }
+        }
+        else if (now - lastBlink >= 50UL)
+        {
+            digitalWrite(PIN_LED, LOW);
+            ledOn = false;
+        }
     }
 #endif
 

@@ -394,7 +394,10 @@ void loop()
     bleModeLoop(); // 把 GATT 回调排队的回包发出去
     handleButton();
     logHeap();
-    delay(2); // C3 单核：让出 CPU 给 idle 和 NimBLE 主机任务
+    // 忙（有回包/分片/刷屏排队或上传中）时 2ms 保证响应；空闲时放宽到 20ms，
+    // 让 idle 任务多睡会降功耗。未连接时bleModeBusy 恒为 false，恒走慢档。
+    // 列表分片每轮 loop 发一片，20ms 一片仍远快于 BLE 链路本身，不构成瓶颈。
+    delay(bleModeBusy() ? 2 : 20);
     return;
 #else
     if (portalActive)
