@@ -205,6 +205,23 @@
   .bad { color: var(--bad); }
   .dim { color: var(--dim); }
 
+  /* ── 连接引导 / 进度 / 两段确认 ───────────────────────── */
+  .hint { font-size: 12.5px; color: #d9a03a; margin-top: 8px; }
+  .hint[hidden] { display: none; }
+  button.armed { border-color: #d9a03a; background: #2a2113; color: #f2d79c; }
+  /* 连接状态常驻顶部，滚到哪都能看到连接情况和最新结果 */
+  #connPanel { position: sticky; top: 6px; z-index: 6; box-shadow: 0 6px 14px rgba(0,0,0,.35); }
+  #prog { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  #prog[hidden] { display: none; }
+  .progtrack {
+    flex: 1; min-width: 120px; height: 8px; background: #111418;
+    border: 1px solid var(--line-strong); border-radius: 5px; overflow: hidden;
+  }
+  #progBar { height: 100%; width: 0; background: var(--primary); transition: width .25s; }
+  #progTxt { font-size: 12px; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #proc { font-size: 12.5px; color: var(--primary-hi); margin-top: 8px; }
+  #proc[hidden] { display: none; }
+
   @media (max-width: 560px) {
     body { padding: 0 14px calc(36px + env(safe-area-inset-bottom)); }
     header { padding: 20px 0 14px; margin-bottom: 14px; }
@@ -246,7 +263,9 @@
     #iname { flex: none; width: 100%; }
 
     #drop { padding: 30px 14px; }
-    #preview { max-height: 60vh; max-height: 60dvh; }
+    /* 预览压到 ~46vh：预览本身吞竖向手势（要留给拖图定位），
+       上下必须留出可滚动区域，否则小屏上页面会被"卡住" */
+    #preview { max-height: 46vh; max-height: 46dvh; }
 
     /* 图库卡片：名称一行，大小+按钮一行 */
     .card { flex-wrap: wrap; row-gap: 9px; padding: 11px 12px; }
@@ -274,23 +293,28 @@
   <p class="warn">
     ios 需用 <b>Bluefy</b> 浏览器打开，并全程保持本页在前台——切到后台 BLE 连接会在几十秒内断开。
   </p>
+  <p class="warn" id="btWarn" hidden>
+    当前浏览器不支持 Web Bluetooth：桌面请用 <b>Chrome / Edge</b>，安卓请用 <b>Chrome</b>，iOS 请用 <b>Bluefy</b> 打开本页。
+  </p>
 
-  <section class="panel">
+  <section class="panel" id="connPanel">
     <div class="row">
       <button id="btnConnect" class="primary">连接设备</button>
+      <button id="btnReconnect" disabled hidden>重连</button>
       <button id="btnDisconnect" disabled>断开</button>
       <span class="sp"></span>
-      <span id="status"></span>
+      <span id="status" class="dim" aria-live="polite">未连接</span>
     </div>
+    <div class="note" id="connGuide">未连接：点「连接设备」，在弹出的列表里选 ColorInk-XXXX。</div>
   </section>
 
-  <nav class="tabs">
-    <button class="tab active" data-page="pageUpload">上传</button>
-    <button class="tab" data-page="pageGallery">图库</button>
-    <button class="tab" data-page="pageDebug">调试<span id="dbgBadge" class="badge" hidden></span></button>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" role="tab" aria-selected="true" aria-controls="pageUpload" data-page="pageUpload">上传</button>
+    <button class="tab" role="tab" aria-selected="false" aria-controls="pageGallery" data-page="pageGallery">图库</button>
+    <button class="tab" role="tab" aria-selected="false" aria-controls="pageDebug" data-page="pageDebug">调试<span id="dbgBadge" class="badge" hidden></span></button>
   </nav>
 
-  <section id="pageUpload" class="tabpage active">
+  <section id="pageUpload" class="tabpage active" role="tabpanel">
     <section class="panel">
       <div class="panel-head"><span class="dot"></span>图片转换与上传</div>
       <div id="drop">点击选择图片，或把图片拖到这里<br><span style="font-size:12px">支持 JPG / PNG / WebP，浏览器本地完成四色转换</span></div>
@@ -331,8 +355,13 @@
       <div class="row">
         <input type="text" id="iname" placeholder="图片名称（可选）" maxlength="24">
         <button id="btnUpload" disabled>上传并显示</button>
-        <button id="btnTestImg" disabled>四色测试图</button>
       </div>
+      <div class="hint" id="upHint">未连接设备：「上传并显示」需要先完成连接。</div>
+      <div id="prog" hidden>
+        <div class="progtrack"><div id="progBar"></div></div>
+        <span id="progTxt"></span>
+      </div>
+      <div id="proc" hidden>正在转换四色…</div>
       <div class="err" id="perr"></div>
       <div class="legend">
         <span><i id="sw0"></i>黑</span>
@@ -365,37 +394,38 @@
 
   </section>
 
-  <section id="pageGallery" class="tabpage">
+  <section id="pageGallery" class="tabpage" role="tabpanel">
     <section class="panel">
       <div class="panel-head">
         <span class="dot"></span>设备图库
         <span class="sp"></span>
         <button id="btnList" disabled>刷新</button>
       </div>
-      <div id="list"></div>
+      <div id="list"><div class="empty">未连接设备，连接后自动加载图库。</div></div>
       <div class="row" style="margin-top:12px">
         <span class="sp"></span>
-        <button id="btnClear" disabled>清屏</button>
+        <button id="btnClear" class="danger" disabled>清屏</button>
       </div>
     </section>
   </section>
 
-  <section id="pageDebug" class="tabpage">
+  <section id="pageDebug" class="tabpage" role="tabpanel">
     <section class="panel">
       <div class="panel-head"><span class="dot"></span>调试操作</div>
       <div class="row">
         <button id="btnInfo" disabled>查询设备</button>
         <button id="btnSelfTest" disabled>链路自检（裸字节，不落盘）</button>
+        <button id="btnTestImg" disabled>四色测试图</button>
       </div>
     </section>
 
     <section class="panel">
-      <div class="panel-head"><span class="dot"></span>日志</div>
+      <div class="panel-head"><span class="dot"></span>日志<span class="sp"></span><button id="btnLogClear">清空日志</button></div>
       <pre id="log"></pre>
     </section>
   </section>
 </div>
-<div id="toast"></div>
+<div id="toast" role="status" aria-live="polite"></div>
 
 <script>
 'use strict';
@@ -430,13 +460,20 @@ try {
 const logEl = document.getElementById('log');
 const $ = id => document.getElementById(id);
 
+let logAuto = true;
+logEl.addEventListener('scroll', () => {
+  // 用户上翻看历史时停住自动滚动，回到接近底部再恢复
+  logAuto = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 24;
+});
+
 function log(text, cls) {
   const t = new Date().toTimeString().slice(0, 8);
   const span = document.createElement('span');
   if (cls) span.className = cls;
   span.textContent = '[' + t + '] ' + text + '\n';
   logEl.appendChild(span);
-  logEl.scrollTop = logEl.scrollHeight;
+  while (logEl.childNodes.length > 500) logEl.removeChild(logEl.firstChild); // 上限防内存膨胀
+  if (logAuto) logEl.scrollTop = logEl.scrollHeight;
   // 调试页不在前台时，重要日志（非 dim）累积成徽标提醒
   if (cls !== 'dim' && !$('pageDebug').classList.contains('active')) {
     unread++;
@@ -453,8 +490,11 @@ function updateBadge() {
 }
 
 function switchTab(name) {
-  for (const t of document.querySelectorAll('.tab'))
-    t.classList.toggle('active', t.dataset.page === name);
+  for (const t of document.querySelectorAll('.tab')) {
+    const on = t.dataset.page === name;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+  }
   for (const p of document.querySelectorAll('.tabpage'))
     p.classList.toggle('active', p.id === name);
   if (name === 'pageDebug') { unread = 0; updateBadge(); }
@@ -473,11 +513,30 @@ function report(text, cls) {
 // 全局浮层提示：任何 tab 下都看得见，上传/刷屏的过程反馈都走这里
 function toast(msg, ms, cls) {
   const t = $('toast');
+  clearTimeout(t._h); clearTimeout(t._tick);
   t.textContent = msg;
   t.className = cls || '';
   t.classList.add('show');
-  clearTimeout(t._h);
   t._h = setTimeout(() => t.classList.remove('show'), ms || 2600);
+}
+
+// 带倒计时的长任务提示：用户能看到还要等多久，而不是干等
+function countdownToast(prefix, ms) {
+  const t = $('toast');
+  clearTimeout(t._h); clearTimeout(t._tick);
+  t.className = '';
+  t.classList.add('show');
+  const t0 = Date.now();
+  (function tick() {
+    const left = Math.ceil((ms - (Date.now() - t0)) / 1000);
+    if (left > 0) {
+      t.textContent = prefix + '（约 ' + left + ' 秒）';
+      t._tick = setTimeout(tick, 500);
+    } else {
+      t.textContent = prefix + '（完成）';
+      t._h = setTimeout(() => t.classList.remove('show'), 800);
+    }
+  })();
 }
 
 function escapeHtml(s) {
@@ -538,9 +597,39 @@ async function writeCmd(s) {
 }
 
 // ── 连接 ────────────────────────────────────────────────────
-// 上传按钮取决于「已连接 + 已有打包结果」，单独管理
+// 上传按钮取决于「已连接 + 已有打包结果 + 不在处理中」，单独管理
 function updateUpBtn() {
-  $('btnUpload').disabled = !(packed && server && server.connected && !busy);
+  const stale = procBusy || procPending || !!procTimer; // 参数刚变、量化还没跑完时禁传
+  $('btnUpload').disabled = !(packed && server && server.connected && !busy && !stale);
+}
+
+// 连接引导：未连接时给出明确的下一步，图库页不显示空白
+function updateGuide() {
+  const on = !!(server && server.connected);
+  const guide = $('connGuide'), hint = $('upHint');
+  if (on) {
+    guide.hidden = true;
+    hint.hidden = true;
+  } else if (busy) {
+    guide.hidden = false;
+    guide.textContent = '正在与设备通信…';
+    hint.hidden = true;
+  } else {
+    guide.hidden = false;
+    guide.textContent = device
+      ? '设备未连接：点「重连」恢复连接，或点「连接设备」重新选择。'
+      : '未连接：点「连接设备」，在弹出的列表里选 ColorInk-XXXX。';
+    hint.hidden = false;
+    hint.textContent = '未连接设备：「上传并显示」需要先完成连接。';
+  }
+  $('btnReconnect').hidden = !(device && !on && !busy);
+  if (!on) {
+    $('list').innerHTML = '<div class="empty">' +
+      (busy ? '正在通信…'
+            : device ? '已断开：点上方「重连」恢复后查看图库。'
+                     : '未连接设备，连接后自动加载图库。') +
+      '</div>';
+  }
 }
 
 function setConnected(on) {
@@ -548,9 +637,11 @@ function setConnected(on) {
   for (const id of ['btnInfo', 'btnList', 'btnClear', 'btnTestImg', 'btnSelfTest'])
     $(id).disabled = off;
   $('btnConnect').disabled = on || busy;
+  $('btnConnect').textContent = busy && !on ? '连接中…' : '连接设备';
   $('btnDisconnect').disabled = !on || busy;
   document.querySelectorAll('#list button').forEach(b => b.disabled = off);
   updateUpBtn();
+  updateGuide();
 }
 
 // 断开后的统一收尾：作废全部句柄引用，并立刻让还在等回包的 Promise 失败。
@@ -579,9 +670,41 @@ function onGattDisconnected(ev) {
   else report('已断开连接', 'dim');
 }
 
+// GATT 通道建立（首次连接与快速重连共用）：连接 → 服务发现 → 特征句柄 → 开通知
+async function setupGatt() {
+  server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(SVC);
+  chCmd  = await svc.getCharacteristic(CMD);
+  chData = await svc.getCharacteristic(DATA);
+  chStat = await svc.getCharacteristic(STAT);
+
+  await chStat.startNotifications();
+  chStat.addEventListener('characteristicvaluechanged', onStat);
+
+  noResp = typeof chData.writeValueWithoutResponse === 'function';
+}
+
+// 建链后的公共收尾：ping 往返验证 → 同步 UI → 拉 info 和图库
+async function afterConnected() {
+  report('已连接：' + (device.name || '(未命名)'), 'ok');
+  log(noResp
+    ? '✓ 支持 writeValueWithoutResponse'
+    : '⚠ 本浏览器没有 writeValueWithoutResponse，回退为带响应写入（会慢很多）',
+    noResp ? 'ok' : 'bad');
+
+  const pong = waitFor(t => t === 'pong', 3000, 'pong');
+  await writeCmd('ping');
+  await pong;
+  log('✓ 命令通道往返正常', 'ok');
+
+  setConnected(true);
+  await queryInfo();
+  await refreshList();
+}
+
 async function connect() {
   if (!navigator.bluetooth) {
-    log('✗ 拿不到 navigator.bluetooth：请用 https:// 或 http://localhost 打开本页', 'bad');
+    report('✗ 拿不到 navigator.bluetooth：请用 https:// 或 http://localhost 打开本页', 'bad');
     return;
   }
 
@@ -600,43 +723,37 @@ async function connect() {
     });
     device.addEventListener('gattserverdisconnected', onGattDisconnected);
 
-    server = await device.gatt.connect();
-    const svc = await server.getPrimaryService(SVC);
-    chCmd  = await svc.getCharacteristic(CMD);
-    chData = await svc.getCharacteristic(DATA);
-    chStat = await svc.getCharacteristic(STAT);
-
-    await chStat.startNotifications();
-    chStat.addEventListener('characteristicvaluechanged', onStat);
-
-    noResp = typeof chData.writeValueWithoutResponse === 'function';
-    report('已连接：' + (device.name || '(未命名)'), 'ok');
-    log(noResp
-      ? '✓ 支持 writeValueWithoutResponse'
-      : '⚠ 本浏览器没有 writeValueWithoutResponse，回退为带响应写入（会慢很多）',
-      noResp ? 'ok' : 'bad');
-
-    const pong = waitFor(t => t === 'pong', 3000, 'pong');
-    await writeCmd('ping');
-    await pong;
-    log('✓ 命令通道往返正常', 'ok');
-
-    setConnected(true);
-    await queryInfo();
-    await refreshList();
+    await setupGatt();
+    await afterConnected();
   } catch (err) {
     // 半途失败也要清干净：否则状态停在"device/server 非空但全是死的"，
     // 下一次连接继续踩同一个坑。
     teardown('连接失败');
     setConnected(false);
+    // 提示不加 dim：要计入调试页徽标，用户停在别的 tab 也能注意到
     if (/disconnected/i.test(err.message || '')) {
       log('提示：链路多半还被宿主端的 GATT 缓存占着。关掉其它开着本页的标签页、' +
-          '在系统蓝牙设置里删除 ColorInk 设备，或长按板上 BOOT 键 2s 强制断开后再试。', 'dim');
+          '在系统蓝牙设置里删除 ColorInk 设备，或长按板上 BOOT 键 2s 强制断开后再试。');
     } else if (/not found/i.test(err.message || '')) {
       log('提示：设备上没有 ColorInk 的 GATT 服务——选到的多半是别的蓝牙设备，' +
-          '请重新连接并认准 ColorInk-XXXX。', 'dim');
+          '请重新连接并认准 ColorInk-XXXX。');
     }
     throw err; // 交给 guarded 统一打红字
+  }
+}
+
+// 快速重连：对本次页面会话已授权过的设备直接 gatt.connect()，免弹设备选择器
+async function reconnect() {
+  if (!device) return connect();
+  log('快速重连 ' + (device.name || '(未命名)') + '…', 'dim');
+  try {
+    await setupGatt();
+    await afterConnected();
+  } catch (err) {
+    teardown('连接失败');
+    setConnected(false);
+    log('快速重连失败（' + err.message + '）：设备可能不在附近或已关机，点「连接设备」重新选择。', 'bad');
+    throw err;
   }
 }
 
@@ -699,6 +816,27 @@ function fetchList() {
   });
 }
 
+// 危险操作两段式确认：首击武装 3 秒，期内再击才执行（防触屏误触）
+function armConfirm(btn, armLabel, run) {
+  if (btn._armed) {
+    clearTimeout(btn._armTimer);
+    btn._armed = false;
+    btn.classList.remove('armed');
+    btn.textContent = btn._orig;
+    run();
+    return;
+  }
+  btn._orig = btn.textContent;
+  btn._armed = true;
+  btn.textContent = armLabel;
+  btn.classList.add('armed');
+  btn._armTimer = setTimeout(() => {
+    btn._armed = false;
+    btn.classList.remove('armed');
+    btn.textContent = btn._orig;
+  }, 3000);
+}
+
 async function refreshList() {
   const data = await fetchList();
   const box = $('list');
@@ -722,11 +860,12 @@ async function refreshList() {
       '<span class="cmeta">' + Math.round(im.size / 1024) + ' KB</span>';
     const show = document.createElement('button');
     show.textContent = '显示';
-    show.onclick = () => guarded(() => displayImage(im.id));
+    show.onclick = () => guarded(() => displayImage(im.id), '屏幕刷新');
     const del = document.createElement('button');
     del.textContent = '删除';
     del.className = 'danger';
-    del.onclick = () => guarded(() => deleteImage(im.id));
+    del.onclick = () => armConfirm(del, '确认删除?', () =>
+      guarded(() => deleteImage(im.id), '删除图片'));
     card.append(show, del);
     box.appendChild(card);
   }
@@ -742,7 +881,7 @@ async function displayImage(id) {
     return;
   }
   report('已排队，等待面板刷新（约 15 秒，期间请勿离开本页）…');
-  toast('屏幕刷新中（约 15 秒，请勿离开本页）…', 16000);
+  countdownToast('屏幕刷新中，请勿离开本页', 16000);
   const done = await waitFor(t => t === 'display:done:' + id || t === 'display:fail:' + id,
                              DISPLAY_MS, 'display:done:' + id);
   const ok = done === 'display:done:' + id;
@@ -767,7 +906,7 @@ async function clearScreen() {
   await writeCmd('clear');
   await queued;
   report('已排队，等待清屏（约 15 秒）…');
-  toast('清屏中（约 15 秒，请勿离开本页）…', 16000);
+  countdownToast('清屏中，请勿离开本页', 16000);
   const done = await waitFor(t => t === 'clear:done' || t === 'clear:fail', DISPLAY_MS, 'clear:done');
   const ok = done === 'clear:done';
   report(ok ? '✓ 已清屏' : '✗ 清屏失败', ok ? 'ok' : 'bad');
@@ -788,9 +927,49 @@ function adler32(buf) {
   return (((b << 16) | a) >>> 0).toString(16).padStart(8, '0');
 }
 
+// 等设备 ack。ack 通知走单槽队列、也可能在空中丢，超时先用 stats 复核真实
+// 收包数：确认已到就继续。数据不能重发——固件是顺序追加，重发会写重复字节。
+async function waitAck(sent) {
+  const ackPred = t => {
+    const m = /^ack:(\d+)$/.exec(t);
+    return m && parseInt(m[1], 10) >= sent;
+  };
+  try {
+    await waitFor(ackPred, 5000, 'ack>=' + sent);
+    return;
+  } catch (e) {
+    if (!/超时/.test(e.message || '')) throw e; // 断开等非超时失败直接上抛
+    log('ack 等待超时，用 stats 复核设备实际收包…', 'dim');
+  }
+  let lastGot = -1;
+  for (let i = 0; i < 2; i++) {
+    if (!server) throw new Error('连接已断开，传输中止');
+    try {
+      const sp = waitFor(t => t.startsWith('stats:'), 3000, 'stats');
+      await writeCmd('stats');
+      lastGot = parseInt((await sp).split(':')[1], 10);
+      if (lastGot >= sent) {
+        log('✓ stats 确认设备已收 ' + lastGot + ' 字节（ack 通知丢失），继续传输', 'ok');
+        return;
+      }
+      log('stats 显示设备收到 ' + lastGot + ' / ' + sent + ' 字节，再等一轮…', 'dim');
+    } catch (e) {
+      if (!server) throw new Error('连接已断开，传输中止');
+    }
+    try {
+      await waitFor(ackPred, 3000, 'ack(retry>=' + sent + ')');
+      return;
+    } catch (e) {
+      if (!server) throw new Error('连接已断开，传输中止');
+    }
+  }
+  throw new Error('流控确认失败：设备收包停在 ' +
+      (lastGot < 0 ? '未知' : lastGot) + ' / ' + sent + ' 字节，链路异常');
+}
+
 // 把 buf 按 8192 字节一批推送，每批等设备 ack 再发下一批。
 // writeValueWithoutResponse 不排队，猛灌会静默丢包（表现为图像整体错位）。
-// onProgress(sent)：每推完一批回调一次，用于状态行显示进度。
+// onProgress(sent)：每推完一批回调一次，用于进度条和状态行。
 async function sendBytes(buf, onProgress) {
   const total = buf.length;
   const chunk = Math.min(MAX_CHUNK, mtu - 3);
@@ -807,10 +986,7 @@ async function sendBytes(buf, onProgress) {
     }
     if (onProgress) onProgress(sent);
     if (sent < total) {
-      await waitFor(t => {
-        const m = /^ack:(\d+)$/.exec(t);
-        return m && parseInt(m[1], 10) >= sent;
-      }, 5000, 'ack>=' + sent);
+      await waitAck(sent);
       stalls++;
     }
   }
@@ -1232,9 +1408,24 @@ function drawToWork() {
   return work;
 }
 
+let procBusy = false, procPending = false, procTimer = 0;
+
+function setProc(on) {
+  procBusy = on;
+  $('proc').hidden = !on;
+  updateUpBtn();
+}
+
 function process() {
-  perr.textContent = '';
   if (!srcImage) return;
+  perr.textContent = '';
+  if (procBusy) { procPending = true; return; } // 量化还没跑完就又来一次：排队补跑
+  setProc(true);
+  // 双 rAF 让浏览器先把「正在转换四色…」画出来，再进同步重活，避免界面假死
+  requestAnimationFrame(() => requestAnimationFrame(runProcess));
+}
+
+function runProcess() {
   try {
     prepareSrcCache(srcImage);
     const work = drawToWork();
@@ -1247,7 +1438,15 @@ function process() {
     perr.textContent = '处理失败：' + e.message;
     console.error(e);
   }
-  updateUpBtn();
+  setProc(false);
+  if (procPending) { procPending = false; process(); }
+}
+
+// 控件变化防抖：连点选项只跑一次量化
+function scheduleProcess() {
+  clearTimeout(procTimer);
+  procTimer = setTimeout(() => { procTimer = 0; process(); }, 120);
+  updateUpBtn(); // 防抖窗口内上传按钮先禁掉，避免传到旧结果
 }
 
 function renderPreview() {
@@ -1303,11 +1502,25 @@ drop.addEventListener('drop', e => {
   drop.classList.remove('hover');
   loadFile(e.dataTransfer.files[0]);
 });
-$('rot').addEventListener('change', process);
-$('fit').addEventListener('change', process);
-$('dmode').addEventListener('change', process);
-$('sharpen').addEventListener('change', process);
-$('vivid').addEventListener('change', process);
+
+// 剪贴板粘贴图片，省一步文件选择（焦点在输入框时不抢）
+document.addEventListener('paste', e => {
+  if (!e.clipboardData) return;
+  const tgt = e.target;
+  if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA')) return;
+  const item = Array.from(e.clipboardData.items || [])
+    .find(i => i.type && i.type.startsWith('image/'));
+  if (!item) return;
+  const f = item.getAsFile();
+  if (f) { loadFile(f); toast('已从剪贴板载入图片'); }
+});
+['rot', 'fit', 'dmode', 'sharpen', 'vivid'].forEach(id =>
+  $(id).addEventListener('change', scheduleProcess));
+// 旋转改变构图方向，位置偏移一并回到中心，避免图形突变
+$('rot').addEventListener('change', () => {
+  imgOffsetX = 0; imgOffsetY = 0;
+  if (srcImage) syncPosUI();
+});
 
 // 预览上拖动调位置（Pointer Events，兼容触摸）
 (function setupDrag() {
@@ -1373,14 +1586,14 @@ for (let i = 0; i < 4; i++) {
     DISPLAY_PAL[i] = e.target.value;
     try { localStorage.setItem(DISPLAY_PAL_KEY, JSON.stringify(DISPLAY_PAL)); } catch (_) {}
     syncDisplayPal();
-    process();
+    scheduleProcess();
   });
 }
 $('calreset').addEventListener('click', () => {
   DISPLAY_PAL = DISPLAY_PAL_DEFAULT.slice();
   try { localStorage.removeItem(DISPLAY_PAL_KEY); } catch (_) {}
   syncDisplayPal();
-  process();
+  scheduleProcess();
 });
 $('calshot').addEventListener('click', () => {
   const c = document.createElement('canvas');
@@ -1435,17 +1648,27 @@ async function uploadImage(name, buf, btn) {
     toast('开始传输 #' + id + '（' + Math.round(buf.length / 1024) + ' KB），请保持本页在前台…', 8000);
 
     report('传输中 0 / ' + buf.length + ' 字节…');
+    const upT0 = performance.now();
+    const prog = $('prog');
+    prog.hidden = false;
+    $('progBar').style.width = '0%';
+    $('progTxt').textContent = '0%';
     let lastPct = -1;
     const { secs, stalls } = await sendBytes(buf, sent => {
       const pct = Math.round(sent / buf.length * 100);
       statusEl.textContent = '传输中 ' + sent + ' / ' + buf.length + ' 字节…';
-      // toast 每个批次（8KB）才刷一次，百分比变了才动，避免频繁重排
+      // 进度条每个批次（8KB）才刷一次，百分比变了才动，避免频繁重排
       if (pct !== lastPct) {
         lastPct = pct;
+        const elapsed = (performance.now() - upT0) / 1000;
+        const eta = sent > 0 ? Math.max(1, Math.round(elapsed / sent * (buf.length - sent))) : 0;
+        $('progBar').style.width = pct + '%';
+        $('progTxt').textContent = pct + '% · 剩余约 ' + eta + 's';
         toast('传输中 ' + pct + '%（' + sent + ' / ' + buf.length + ' 字节）…', 8000);
         labelBtn.textContent = '上传 ' + pct + '%';
       }
     });
+    prog.hidden = true;
 
     labelBtn.textContent = '校验中…';
     toast('传输完成，等待设备落盘校验…');
@@ -1488,6 +1711,7 @@ async function uploadImage(name, buf, btn) {
     await displayImage(id);
   } finally {
     labelBtn.textContent = origLabel;
+    $('prog').hidden = true; // 出错中断时也把进度条收掉
   }
 }
 
@@ -1517,9 +1741,32 @@ async function selfTest() {
 }
 
 // ── 按钮 ────────────────────────────────────────────────────
-async function guarded(fn) {
+// 长任务期间拦截页面离开：传输/刷屏到一半误刷新会静默中断
+let busyTask = '';
+function guardUnload(on) {
+  if (on) window.addEventListener('beforeunload', beforeUnload);
+  else window.removeEventListener('beforeunload', beforeUnload);
+}
+function beforeUnload(e) { e.preventDefault(); e.returnValue = ''; return ''; }
+
+// 切后台再回来时补一条状态：任务不因切后台停止，但用户需要知道进行到哪了
+let hiddenTask = '';
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    if (busy) hiddenTask = busyTask;
+  } else if (hiddenTask) {
+    const t = hiddenTask;
+    hiddenTask = '';
+    toast(busy ? '已回到页面：' + t + '仍在进行…'
+               : '已回到页面：' + t + '已结束（结果见状态行）', 4000);
+  }
+});
+
+async function guarded(fn, task) {
   if (busy) return;
   busy = true;
+  busyTask = task || '操作';
+  guardUnload(true);
   setConnected(!!(server && server.connected));
   try {
     await fn();
@@ -1528,25 +1775,37 @@ async function guarded(fn) {
     toast('✗ ' + e.message, 5000, 'bad');
   } finally {
     busy = false;
+    busyTask = '';
+    guardUnload(false);
     setConnected(!!(server && server.connected));
   }
 }
 
-$('btnConnect').addEventListener('click', () => guarded(connect));
+$('btnConnect').addEventListener('click', () => guarded(connect, '连接设备'));
+$('btnReconnect').addEventListener('click', () => guarded(reconnect, '重连'));
 $('btnDisconnect').addEventListener('click', disconnect);
-$('btnInfo').addEventListener('click', () => guarded(queryInfo));
-$('btnList').addEventListener('click', () => guarded(refreshList));
-$('btnClear').addEventListener('click', () => guarded(clearScreen));
+$('btnInfo').addEventListener('click', () => guarded(queryInfo, '查询设备'));
+$('btnList').addEventListener('click', () => guarded(refreshList, '刷新列表'));
+$('btnClear').addEventListener('click', () =>
+  armConfirm($('btnClear'), '确认清屏?', () => guarded(clearScreen, '清屏')));
 $('btnUpload').addEventListener('click', () => {
   if (!packed) return;
-  guarded(() => uploadImage(safeName($('iname').value, 'image'), packed));
+  guarded(() => uploadImage(safeName($('iname').value, 'image'), packed), '上传图片');
 });
 $('btnTestImg').addEventListener('click', () =>
-  guarded(() => uploadImage(safeName($('iname').value, 'test'), makeTestImage(), $('btnTestImg'))));
-$('btnSelfTest').addEventListener('click', () => guarded(selfTest));
+  guarded(() => uploadImage(safeName($('iname').value, 'test'), makeTestImage(), $('btnTestImg')), '上传测试图'));
+$('btnSelfTest').addEventListener('click', () => guarded(selfTest, '链路自检'));
+$('btnLogClear').addEventListener('click', () => {
+  logEl.innerHTML = '';
+  logAuto = true;
+  log('日志已清空', 'dim');
+});
 
-const PAGE_VER = '2026-10-07g'; // 每次改本页都改这里：用来确认浏览器加载的不是缓存旧版
-log('页面就绪 v' + PAGE_VER + '。连接设备 → 上传页选图转四色并显示，图库页管理已传图片，调试页看日志。');
+// 环境检测：不支持 Web Bluetooth 时顶部直接给横幅，而不是等点击后才进日志
+if (!navigator.bluetooth) $('btWarn').hidden = false;
+
+const PAGE_VER = '2026-10-12a'; // 每次改本页都改这里：用来确认浏览器加载的不是缓存旧版
+log('页面就绪 v' + PAGE_VER + '。连接设备 → 上传页选图转四色并显示（支持 Ctrl+V 粘贴图片），图库页管理已传图片，调试页看日志。');
 log('本地试跑：在本目录执行 python -m http.server 8000，然后开 http://localhost:8000/ble_test.html');
 log('（http://localhost 也算安全上下文，可以直接用 Web Bluetooth）', 'dim');
 unread = 0; updateBadge(); // 启动提示不算未读，徽标只统计连接后的重要事件
