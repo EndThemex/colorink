@@ -72,6 +72,9 @@ static uint8_t chunkOut[544];           // 一条通知的组包缓冲
 // 排队的刷屏/清屏：绝不在 GATT 回调里执行（一次刷新阻塞 ~15s，会卡死链路）
 static volatile int pendingDisplayId = -1;
 static volatile bool pendingClear = false;
+// 这次刷屏由按键触发：没有客户端在等 display:done，别发这条回包，
+// 否则页面会把它当成自己那条 display 请求的应答，提前结束/错位。
+static volatile bool pendingFromButton = false;
 
 // ── 回包发送 ────────────────────────────────────────────────
 
@@ -424,6 +427,38 @@ void bleForceDisconnect()
     Serial.printf("[BLE] force disconnect handle=%u\n", clientConnHandle);
 }
 
+void bleRequestNextImage()
+{
+    // 上传过程中别插一次 15s 的刷屏：会把正在跑的传输拖成假死
+    if (uploading)
+    {
+        Serial.println("[BTN] short press ignored (upload in progress)");
+        return;
+    }
+
+    // 上一次按键排队的图可能还没刷完，从它往后接着数，连按两次才会跳两张
+    int base = -1;
+    portENTER_CRITICAL(&pendingMux);
+    base = pendingDisplayId;
+    portEXIT_CRITICAL(&pendingMux);
+    if (base < 0)
+        base = galleryCurrentId();
+
+    int id = galleryNextId(base, 1);
+    if (id < 0)
+    {
+        Serial.println("[BTN] short press ignored (no images)");
+        return;
+    }
+
+    portENTER_CRITICAL(&pendingMux);
+    pendingDisplayId = id;
+    pendingFromButton = true;
+    pendingClear = false;
+    portEXIT_CRITICAL(&pendingMux);
+    Serial.printf("[BTN] short press -> display next id=%d\n", id);
+}
+
 void blePumpReplies()
 {
     if (statChar == nullptr || !clientConnected)
@@ -527,9 +562,12 @@ void bleModeLoop()
     if (!epdIsRendering())
     {
         int id = -1;
+        bool fromButton = false;
         portENTER_CRITICAL(&pendingMux);
         id = pendingDisplayId;
         pendingDisplayId = -1;
+        fromButton = pendingFromButton;
+        pendingFromButton = false;
         portEXIT_CRITICAL(&pendingMux);
 
         bool clr = false;
@@ -544,8 +582,11 @@ void bleModeLoop()
         if (id >= 0)
         {
             bool ok = galleryDisplayById(id);
-            Serial.printf("[BLE] display id=%d %s\n", id, ok ? "done" : "failed");
-            queueReply(ok ? "display:done:%d" : "display:fail:%d", id);
+            Serial.printf("[BLE] display id=%d %s%s\n", id, ok ? "done" : "failed",
+                          fromButton ? " (button)" : "");
+            // 按键触发的刷屏没有请求方在等回包，别发 display:done
+            if (!fromButton)
+                queueReply(ok ? "display:done:%d" : "display:fail:%d", id);
         }
         else if (clr)
         {

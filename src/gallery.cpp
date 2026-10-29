@@ -306,12 +306,12 @@ bool galleryDisplayById(int id) {
     return true;
 }
 
-bool galleryCycle(int dir) {
+int galleryNextId(int baseId, int dir) {
     int ids[MAX_IMAGES];
     int n = 0;
-    if (!fsReady) return false;
+    if (!fsReady) return -1;
     File dirH = LittleFS.open(IMG_DIR);
-    if (!dirH || !dirH.isDirectory()) return false;
+    if (!dirH || !dirH.isDirectory()) return -1;
     for (File f = dirH.openNextFile(); f && n < MAX_IMAGES; f = dirH.openNextFile()) {
         String fname = f.name();
         int slash = fname.lastIndexOf('/');
@@ -320,22 +320,23 @@ bool galleryCycle(int dir) {
         int id = idFromFilename(fname.c_str());
         if (id >= 0) ids[n++] = id;
     }
-    if (n == 0) return false;
+    if (n == 0) return -1;
     for (int i = 0; i < n - 1; i++)
         for (int j = i + 1; j < n; j++)
             if (ids[j] < ids[i]) { int t = ids[i]; ids[i] = ids[j]; ids[j] = t; }
 
-    int current = galleryCurrentId();
     int pos = -1;
     for (int i = 0; i < n; i++)
-        if (ids[i] == current) { pos = i; break; }
-    int next;
-    if (pos < 0) {
-        next = (dir >= 0) ? 0 : n - 1;
-    } else {
-        next = (pos + (dir >= 0 ? 1 : -1) + n) % n;
-    }
-    return galleryDisplayById(ids[next]);
+        if (ids[i] == baseId) { pos = i; break; }
+    if (pos < 0)
+        return (dir >= 0) ? ids[0] : ids[n - 1];
+    return ids[(pos + (dir >= 0 ? 1 : -1) + n) % n];
+}
+
+bool galleryCycle(int dir) {
+    int id = galleryNextId(galleryCurrentId(), dir);
+    if (id < 0) return false;
+    return galleryDisplayById(id);
 }
 
 bool galleryDeleteById(int id) {

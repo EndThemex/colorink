@@ -36,6 +36,10 @@ void galleryUploadAbort();
 // Returns false if the image does not exist.
 bool galleryDisplayById(int id);
 
+// 相对 baseId 的下一张（dir=1）/上一张（dir=-1）图片 id，只算不动屏。
+// baseId<0 或已不存在时从第一张（dir=1）/最后一张（dir=-1）开始；无图返回 -1。
+int galleryNextId(int baseId, int dir);
+
 // Display the next (dir=1) or previous (dir=-1) image in id order.
 bool galleryCycle(int dir);
 

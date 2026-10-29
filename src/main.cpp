@@ -289,9 +289,9 @@ static void handleButton()
         if (dur >= (unsigned long)SHORT_PRESS_MIN_MS && dur < (unsigned long)CFG_BTN_HOLD_MS)
         {
 #ifdef INKSIGHT_BLE
-            // BLE 固件里按键不主动刷屏：一次刷新要阻塞 ~15s，期间 loop() 停转、
-            // notify 发不出去，正在传图的链路会被拖成假死。刷屏只由 BLE 命令触发。
-            Serial.println("[BTN] short press ignored (刷新只由 BLE 命令触发)");
+            // 蓝牙固件里单击 = 切到下一张已存图片。刷屏一次要阻塞 ~15s，不在
+            // 这里直接做（会把 loop 的回包发送卡住），交给 bleModeLoop 排队执行。
+            bleRequestNextImage();
 #else
             if (galleryCount() > 0)
             {

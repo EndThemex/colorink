@@ -60,5 +60,9 @@ void bleModeLoop();
 // 手机端卡死（Bluefy 崩了、连接半死）时，设备端否则没有任何办法释放连接。
 void bleForceDisconnect();
 
+// 单击按键：把"显示下一张已存图片"排进队列，真正的刷屏在 bleModeLoop 里执行。
+// 不在按钮处理里直接刷屏——一次刷新阻塞 ~15s，会把 loop 的回包发送卡住。
+void bleRequestNextImage();
+
 #endif // INKSIGHT_BLE
 #endif // INKSIGHT_BLE_SERVICE_H
