@@ -7,15 +7,15 @@
 // platformio.ini 里所有环境都定义 BOARD_PROFILE_ESP32_C3_HUAWEI。
 #if defined(BOARD_PROFILE_ESP32_C3_HUAWEI)
 // 华为 3.98" 768x552 JD79665 手机壳屏（原装小板飞线接线）
-#define PIN_EPD_MOSI 6 // DIN
+#define PIN_EPD_MOSI 3 // DIN
 #define PIN_EPD_SCK 4  // CLK
-#define PIN_EPD_CS 7   // CS
-#define PIN_EPD_DC 2   // DC
-#define PIN_EPD_RST 10 // RST
-#define PIN_EPD_BUSY 1 // BUSY
+#define PIN_EPD_CS 5   // CS
+#define PIN_EPD_DC 6   // DC
+#define PIN_EPD_RST 7  // RST
+#define PIN_EPD_BUSY 10 // BUSY
 #define PIN_BAT_ADC 0
-#define PIN_CFG_BTN 9
-#define PIN_LED 3
+#define PIN_CFG_BTN 2
+#define PIN_LED 1
 #else
 #error "Unsupported board profile. Define BOARD_PROFILE_ESP32_C3_HUAWEI"
 #endif

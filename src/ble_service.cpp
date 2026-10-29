@@ -345,6 +345,10 @@ bool bleModeStart()
     NimBLEDevice::init(name);
     NimBLEDevice::setMTU(517); // ATT MTU 上限；Chrome 一般会接受
 
+    // 发射功率保持 NimBLE 默认档位：之前为补链路余量试过 +9dBm，实测根因是
+    // 40MHz 晶振负载电容不对（手指贴晶振才搜得到），与发射功率无关；+9dBm
+    // 会让射频功放和 LDO 明显发热，所以还原，不再主动设功率。
+
     NimBLEServer *server = NimBLEDevice::createServer();
     if (server == nullptr)
     {
@@ -377,10 +381,28 @@ bool bleModeStart()
     svc->start();
 
     NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
-    adv->addServiceUUID(SVC_UUID);
-    adv->setName(name);
-    adv->setScanResponse(true); // 名字 + UUID 放不进 31 字节的广播包，靠扫描响应补
-    NimBLEDevice::startAdvertising();
+    // 广播包只有 31 字节，128 位 UUID 独占 18 字节。原来的写法是"UUID 进广播包、
+    // 名字靠扫描响应补"；被动扫描的接收端（Windows 蓝牙列表、部分手机扫描工具）
+    // 不发扫描请求，看到的就是一个没名字的设备，很容易被当成"搜不到"。这里反过来：
+    // 广播包里放完整名字，UUID 挪到扫描响应。上位机按 namePrefix 过滤（见
+    // web/ble_test.html），不依赖广播包里的服务 UUID。
+    NimBLEAdvertisementData advData;
+    advData.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
+    advData.setName(name);
+
+    NimBLEAdvertisementData scanData;
+    scanData.setCompleteServices(NimBLEUUID(SVC_UUID));
+
+    adv->setAdvertisementData(advData);
+    adv->setScanResponseData(scanData);
+    adv->setScanResponse(true);
+
+    // 20~25ms 的短间隔（单位 0.625ms）：扫描窗口的命中率更高，用时间换灵敏度。
+    adv->setMinInterval(0x20);
+    adv->setMaxInterval(0x28);
+
+    if (!NimBLEDevice::startAdvertising())
+        Serial.println("[BLE] startAdvertising failed");
 
     Serial.printf("[BLE] service up, name='%s'  MTU target=517  t=%lums\n",
                   name, millis());
@@ -471,8 +493,32 @@ void blePumpReplies()
         sendToClient((const uint8_t *)msg, strnlen(msg, sizeof(msg)));
 }
 
+// ── 广播看门狗 ──────────────────────────────────────────────
+// 控制器异常时广播可能被静默停掉（没有回调也没有错误码），用户看到的就是
+// "搜不到"，只能重启。每 30s 兜一次底：没连人、又不在广播，就重新开播。
+static void advWatchdog()
+{
+    if (clientConnected)
+        return;
+
+    static unsigned long lastCheck = 0;
+    unsigned long now = millis();
+    if (now - lastCheck < 30000UL)
+        return;
+    lastCheck = now;
+
+    NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+    if (adv == nullptr || adv->isAdvertising())
+        return;
+
+    Serial.println("[BLE] advertising lost, restarting");
+    if (!adv->start())
+        Serial.println("[BLE] restart advertising failed");
+}
+
 void bleModeLoop()
 {
+    advWatchdog();
     // 先把回包发出去（含 display:queued / clear:queued），再执行刷屏
     blePumpReplies();
 

@@ -13,6 +13,17 @@
 #include <SPI.h>
 #include "webapp.h" // 刷新期间泵 HTTP/配网服务，避免长时间收不到请求
 
+// ── NEW 型物理帧测试模式（-DEPD_JD79665_PHYS800）──────────────────────────
+// 参考驱动（krstc/openepaperlinkforCN tag_fw/src/epd_driver/jd79665.cpp）对
+// STYPE_SIZE_75_JD79665_BWRY_NEW 有独立路径：逻辑 768x552，物理 800x600，
+// 逻辑图像写在 X 偏移 32 处，边缘补白。若屏实际是 new 型而按 768x552 声明，
+// 物理 gate 552..599 永远不被扫描 → 固定位置竖条保留旧画面。此模式用于验证。
+#ifdef EPD_JD79665_PHYS800
+#define PHYS_XRES 800
+#define PHYS_YRES 600
+#define PHYS_X_OFFSET 32
+#endif
+
 // 硬件 SPI（FSPI，引脚经 GPIO 矩阵任意映射）：4MHz，写 105KB 帧数据约 0.2s
 static SPIClass *epdSpi = nullptr;
 
@@ -166,7 +177,13 @@ void epdInit()
     epdSendCmdData(0x60, 2, 0x02, 0x00);                         // TCON setting
     epdSendCmdData(0x30, 1, 0x08);                               // PLL control
     epdSendCmdData(0x50, 1, 0x3F);                               // VCOM interval
+#ifdef EPD_JD79665_PHYS800
+    // new 型：向控制器声明物理帧 800x600（参考驱动同位置按 solumType 切换）
+    epdSendCmdData(0x61, 4, PHYS_XRES >> 8, PHYS_XRES & 0xFF, PHYS_YRES >> 8, PHYS_YRES & 0xFF);
+    Serial.println("[EPD] PHYS800 test mode: frame 800x600, X offset 32");
+#else
     epdSendCmdData(0x61, 4, W >> 8, W & 0xFF, H >> 8, H & 0xFF); // resolution
+#endif
     epdSendCmdData(0x65, 4, 0x10, 0x00, 0x20, 0x00);             // GSST setting
     epdSendCmdData(0xE3, 1, 0x2F);
     epdSendCmdData(0x84, 1, 0x01);
@@ -194,6 +211,38 @@ static void jdWrite2bpp(const uint8_t *buf)
         epdSendDataBulk(buf + y * rowBytes, rowBytes);
     }
 }
+
+#ifdef EPD_JD79665_PHYS800
+// ── new 型物理帧写入：单个全窗 + 连续数据流 ──
+// 与参考驱动 epdWriteDisplayDataPhysicalFrame 一致：600 行 × 200 字节连续写。
+// 每行前 8 字节（X 偏移 32px）填白，逻辑 192 字节接在其后；gate 552..599 的
+// 补边行整行填白（0x55 = 0001 0101，即全白 2bpp 打包）。
+static void jdWrite2bppPhys(const uint8_t *buf)
+{
+    const int physRowBytes = PHYS_XRES / 4; // 200
+    const int xOffBytes = PHYS_X_OFFSET / 4; // 8
+    const int logRowBytes = W / 4;           // 192
+    uint8_t whiteRun[200];
+    memset(whiteRun, 0x55, sizeof(whiteRun));
+
+    epdSetWindow(0, 0, PHYS_XRES, PHYS_YRES);
+    epdSendCommand(0x10);
+    for (int gy = 0; gy < PHYS_YRES; gy++)
+    {
+        if ((gy & 63) == 0)
+            netServicePump();
+        if (gy < H)
+        {
+            epdSendDataBulk(whiteRun, xOffBytes);
+            epdSendDataBulk(buf + gy * logRowBytes, logRowBytes);
+        }
+        else
+        {
+            epdSendDataBulk(whiteRun, physRowBytes);
+        }
+    }
+}
+#endif
 
 static uint8_t jdPackMonoPixelGroup(const uint8_t *image, int rowBytes, int y, int x)
 {
@@ -243,13 +292,21 @@ void epdDisplay2bpp(const uint8_t *image2bpp)
     {
         unsigned long t0 = millis();
         Serial.printf("[EPD] attempt %d start BUSY=%d\n", attempt, digitalRead(PIN_EPD_BUSY));
-        epdInit();
+        epdInit(); // 复位 + 寄存器序列 + 上电
         Serial.printf("[EPD] init done %lums BUSY=%d\n", millis() - t0, digitalRead(PIN_EPD_BUSY));
 
+#ifdef EPD_JD79665_PHYS800
+        jdWrite2bppPhys(image2bpp);
+#else
         jdWrite2bpp(image2bpp);
+#endif
         Serial.printf("[EPD] data done %lums\n", millis() - t0);
 
+#ifdef EPD_JD79665_PHYS800
+        epdSetWindow(0, 0, PHYS_XRES, PHYS_YRES);
+#else
         epdSetWindow(0, 0, W, H);
+#endif
         epdSendCommand(0x12);
         epdSendData(0x00);
         epdWaitBusy(60000);
