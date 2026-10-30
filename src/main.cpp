@@ -40,21 +40,13 @@ bool ensureColorBuf()
     colorBuf = (uint8_t *)malloc(COLOR_BUF_LEN);
     if (!colorBuf)
     {
-        Serial.println("[MEM] colorBuf alloc failed");
+        // 把余量和最大连续块一起打出来：maxalloc 缩水比 free 缩水更能说明碎片问题
+        Serial.printf("[MEM] colorBuf alloc failed: free=%u maxalloc=%u\n",
+                      (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
         return false;
     }
     Serial.printf("[MEM] colorBuf allocated %d bytes on heap\n", COLOR_BUF_LEN);
     return true;
-}
-
-void freeColorBuf()
-{
-    if (colorBuf)
-    {
-        free(colorBuf);
-        colorBuf = nullptr;
-        Serial.println("[MEM] colorBuf freed");
-    }
 }
 #endif
 
@@ -186,9 +178,9 @@ static void enterPortalMode(PortalEntryReason reason)
     startCaptivePortal(apName.c_str());
     Serial.printf("[PORTAL] AP '%s' visible at t=%lums\n", apName.c_str(), millis() - t0);
 
-    // 屏幕只由网页控制：配网时也不刷屏，面板保留上一次的画面
-    freeColorBuf(); // 配网期间用不到帧缓冲，释放 105KB 堆给 lwIP（DNS/HTTP）
-
+    // 串口通道在配网期间也能上传/刷屏，帧缓冲必须常驻：开机时已在堆最宽裕的
+    // 阶段一次分配好，这里不再释放。运行期再 malloc 105KB 连续内存会因碎片失败，
+    // 表现为"上传成功但一点显示就 colorBuf alloc failed"。
     portalStartedAt = millis();
     portalTimeoutMs = (reason == PortalEntryReason::AUTO_WIFI_FAILURE)
                           ? PORTAL_AUTO_TIMEOUT_MS
@@ -340,6 +332,12 @@ void setup()
     Serial.printf("\n[BOOT] ColorInk LAN gallery  %s %s\n", __DATE__, __TIME__);
     Serial.printf("[BOOT] free heap: %u\n", (unsigned)ESP.getFreeHeap());
 
+    // 预分配 105KB 帧缓冲：放在 loadConfig/galleryInit 之前，此时堆最宽裕、也最
+    // 不容易碎片化，保证一次性拿到连续内存。屏幕刷新后 colorBuf 常驻不再释放，
+    // 运行期刷新不再依赖大块 malloc（上传过图片后堆碎片化，运行期大分配可能失败
+    // → 刷新静默失效）。
+    ensureColorBuf();
+
     ledInit();
     pinMode(PIN_CFG_BTN, INPUT_PULLUP);
     gpioInit();
@@ -347,11 +345,6 @@ void setup()
     loadConfig();
     galleryInit();
     Serial.printf("[BOOT] storage ready t=%lums\n", millis() - bootT0);
-
-    // 预分配 105KB 帧缓冲：此时 WiFi/lwIP 还没起，堆最宽裕，保证一次性拿到
-    // 连续内存。屏幕刷新后 colorBuf 常驻不再释放，运行期刷新不再依赖大块
-    // malloc（上传过图片后堆碎片化，运行期大分配可能失败 → 刷新静默失效）。
-    ensureColorBuf();
 
 #ifdef INKSIGHT_BLE
     // 蓝牙固件：WiFi 一次都不启动（WiFi.mode / WiFi.begin 全程不调用），

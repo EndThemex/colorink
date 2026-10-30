@@ -53,7 +53,6 @@ extern uint8_t imgBuf[];
 extern uint8_t *colorBuf;
 extern bool useColorBuf;
 bool ensureColorBuf();
-void freeColorBuf();
 #endif
 
 // Shared helper (defined in main.cpp)
