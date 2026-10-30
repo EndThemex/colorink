@@ -31,6 +31,7 @@ uint8_t dataBuf[DATA_BUF];
 
 int pendingDisplayId = -1;
 bool pendingClear = false;
+unsigned long lastRxMs = 0;         // 最近一次收到串口数据的时刻（0 = 从未收到）
 
 void resetStats()
 {
@@ -321,6 +322,9 @@ void serialServiceBegin(unsigned long baud)
 
 void serialServiceLoop()
 {
+    if (Serial.available() > 0)
+        lastRxMs = millis();
+
     if (dataMode)
     {
         handleData();
@@ -347,4 +351,10 @@ void serialServiceLoop()
     }
 
     runPending();
+}
+
+bool serialServiceBusy()
+{
+    return uploading || dataMode || pendingDisplayId >= 0 || pendingClear ||
+           (lastRxMs != 0 && millis() - lastRxMs < 10000UL);
 }

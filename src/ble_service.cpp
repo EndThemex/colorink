@@ -427,6 +427,19 @@ void bleForceDisconnect()
     Serial.printf("[BLE] force disconnect handle=%u\n", clientConnHandle);
 }
 
+bool bleIsConnected()
+{
+    return clientConnected;
+}
+
+bool bleIsBusy()
+{
+    portENTER_CRITICAL(&pendingMux);
+    bool pending = pendingDisplayId >= 0 || pendingClear;
+    portEXIT_CRITICAL(&pendingMux);
+    return uploading || pending || epdIsRendering();
+}
+
 void bleRequestNextImage()
 {
     // 上传过程中别插一次 15s 的刷屏：会把正在跑的传输拖成假死

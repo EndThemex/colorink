@@ -71,4 +71,9 @@ static const int   LIVE_WIFI_RETRY_MS = 5000; // Retry interval when WiFi is dis
 static const unsigned long PORTAL_AUTO_TIMEOUT_MS = 3UL * 60UL * 1000UL;
 static const unsigned long PORTAL_MANUAL_TIMEOUT_MS = 10UL * 60UL * 1000UL;
 
+// ── 自动深睡（仅蓝牙固件）────────────────────────────────────
+// 蓝牙未连接、无按键、串口也无流量持续这么久后进入深睡，按键（低电平）唤醒
+// （唤醒即重启，开机后重新广播）。设 0 可禁用自动深睡。
+#define SLEEP_IDLE_TIMEOUT_MS (5UL * 60UL * 1000UL)
+
 #endif // INKSIGHT_CONFIG_H

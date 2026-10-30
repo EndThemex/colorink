@@ -4,6 +4,8 @@
 // Web:  upload 2bpp (BWRY) framebuffers from the browser, list / display / delete.
 //       The panel is repainted only on a web-page action (display / clear).
 // Button: short press = next image, long press (2s) = provisioning portal.
+// BLE build: idle (no BLE client / no button / no serial traffic) for
+//            SLEEP_IDLE_TIMEOUT_MS -> deep sleep, button press wakes (= reboot).
 // No cloud services: all previous remote API / OTA / AI-voice code removed.
 //
 // 两套固件，编译期二选一（见 platformio.ini）：
@@ -21,6 +23,8 @@
 
 #ifdef INKSIGHT_BLE
 #include "ble_service.h"
+#include <esp_sleep.h>
+#include <driver/gpio.h>
 #else
 #include <WiFi.h>
 #include "portal.h"
@@ -322,6 +326,51 @@ static void logHeap()
     lastFree = freeNow;
 }
 
+// ── 自动深睡（仅蓝牙固件）───────────────────────────────────
+// 电池供电的相框大部分时间无人连接：蓝牙未连接、按键没按、串口也没流量，
+// 持续 SLEEP_IDLE_TIMEOUT_MS 后进入深睡，直到按键（GPIO2，低电平）唤醒。
+// 深睡唤醒等于重启：setup 重新跑，BLE 重新开始广播。
+#if defined(INKSIGHT_BLE) && SLEEP_IDLE_TIMEOUT_MS > 0
+static void handleAutoSleep()
+{
+    static unsigned long lastActiveMs = 0;
+
+    bool active = bleIsConnected() || bleIsBusy() || serialServiceBusy() ||
+                  digitalRead(PIN_CFG_BTN) == LOW;
+    if (active || lastActiveMs == 0)
+    {
+        // lastActiveMs==0 是开机后的第一次调用，先建立计时基准再开始倒数
+        lastActiveMs = millis();
+        return;
+    }
+    if (millis() - lastActiveMs < (unsigned long)SLEEP_IDLE_TIMEOUT_MS)
+        return;
+
+    Serial.printf("[PWR] idle %lus, entering deep sleep (button wakes)\n",
+                  (unsigned long)(SLEEP_IDLE_TIMEOUT_MS / 1000UL));
+    Serial.flush();
+    delay(50);
+
+#if PIN_LED >= 0
+    digitalWrite(PIN_LED, LOW);
+#endif
+
+    // C3 只有 RTC 域的 GPIO0-5 能在深睡中唤醒，按键脚 GPIO2 恰好在内。
+    // 深睡期间数字 pad 的配置会丢，进睡前重新配一次输入上拉，
+    // 保证按键悬空时是高电平、按下拉低才触发唤醒。
+    const gpio_config_t ioConf = {
+        .pin_bit_mask = 1ULL << PIN_CFG_BTN,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&ioConf);
+    esp_deep_sleep_enable_gpio_wakeup(1ULL << PIN_CFG_BTN, ESP_GPIO_WAKEUP_GPIO_LOW);
+    esp_deep_sleep_start(); // 不返回：唤醒即重启
+}
+#endif // INKSIGHT_BLE && SLEEP_IDLE_TIMEOUT_MS > 0
+
 // ── Server mode ─────────────────────────────────────────────
 
 void setup()
@@ -350,6 +399,16 @@ void setup()
     // 蓝牙固件：WiFi 一次都不启动（WiFi.mode / WiFi.begin 全程不调用），
     // 射频只服务 NimBLE，避开 C3 单天线的 WiFi/BLE 共存降速与发热。
     Serial.println("[BOOT] BLE-only build: WiFi stays off");
+#ifdef SLEEP_IDLE_TIMEOUT_MS
+    // 深睡是被按键唤醒的：这次按下只用来唤醒，别再触发"切到下一张"，
+    // 等它松开再进主循环（handleButton 才不会把它当成一次短按）。
+    if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_GPIO)
+    {
+        Serial.println("[BOOT] woken by button");
+        while (digitalRead(PIN_CFG_BTN) == LOW)
+            delay(10);
+    }
+#endif
     bleModeStart();
     Serial.printf("[BOOT] ready t=%lums heap=%u\n",
                   millis() - bootT0, (unsigned)ESP.getFreeHeap());
@@ -388,6 +447,9 @@ void loop()
     bleModeLoop(); // 把 GATT 回调排队的回包发出去
     serialServiceLoop(); // 网页串口通道：同一固件另开一条 USB 串口上传
     handleButton();
+#if SLEEP_IDLE_TIMEOUT_MS > 0
+    handleAutoSleep();
+#endif
     logHeap();
     delay(2); // C3 单核：让出 CPU 给 idle 和 NimBLE 主机任务
     return;

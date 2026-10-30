@@ -20,4 +20,8 @@ void serialServiceBegin(unsigned long baud);
 // 主循环里调用：处理命令、接收裸字节并执行排队的刷屏/清屏。
 void serialServiceLoop();
 
+// 串口通道是否还在被使用：上传/收数据/有排队操作，或 10s 内有收到过数据。
+// 自动深睡用它判断"USB 串口侧还有人在操作"。
+bool serialServiceBusy();
+
 #endif // INKSIGHT_SERIAL_SERVICE_H

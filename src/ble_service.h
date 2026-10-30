@@ -64,5 +64,12 @@ void bleForceDisconnect();
 // 不在按钮处理里直接刷屏——一次刷新阻塞 ~15s，会把 loop 的回包发送卡住。
 void bleRequestNextImage();
 
+// 当前是否有客户端连接。
+bool bleIsConnected();
+
+// 设备是否正忙：上传进行中 / 有排队的刷屏或清屏 / 屏幕正在刷新。
+// 自动深睡用它判断"还在被人使用"。
+bool bleIsBusy();
+
 #endif // INKSIGHT_BLE
 #endif // INKSIGHT_BLE_SERVICE_H
