@@ -191,6 +191,16 @@
   details.cal summary::before { content: '▸ '; font-size: 11px; }
   details.cal[open] summary::before { content: '▾ '; }
 
+  /* ── 日历 ───────────────────────────────────────────── */
+  #calDate { width: 150px; }
+  #calNote, #calName { flex: 1; min-width: 140px; width: auto; }
+  #calPreview {
+    display: block; max-width: 100%; max-height: 65vh; margin: 12px auto 0;
+    border: 1px solid var(--line-strong); border-radius: 8px; background: #fff;
+    image-rendering: pixelated;
+  }
+  .calhint { font-size: 12px; color: var(--dim); }
+
   /* ── 图库列表 ───────────────────────────────────────── */
   #list { display: flex; flex-direction: column; gap: 8px; }
   .card {
@@ -320,6 +330,7 @@
 
   <nav class="tabs">
     <button class="tab active" data-page="pageUpload">上传</button>
+    <button class="tab" data-page="pageCalendar">日历</button>
     <button class="tab" data-page="pageGallery">图库</button>
     <button class="tab" data-page="pageDebug">调试<span id="dbgBadge" class="badge" hidden></span></button>
   </nav>
@@ -410,6 +421,88 @@
     </section>
 
   </section>
+
+  <section id="pageCalendar" class="tabpage">
+    <section class="panel">
+      <div class="panel-head"><span class="dot"></span>日历生成</div>
+      <div class="row">
+        <label class="fl fls">版式
+          <select id="calLayout">
+            <option value="portrait">竖版 552 × 768</option>
+            <option value="landscape">横版 768 × 552</option>
+          </select>
+        </label>
+        <label class="fl fls">日期
+          <input type="date" id="calDate">
+        </label>
+        <label class="fl"><input type="checkbox" id="calFollow" checked> 跟随今天</label>
+        <button id="calToday">今天</button>
+      </div>
+      <div class="row">
+        <label class="fl fls">周起始
+          <select id="calWeekStart">
+            <option value="1">周一</option>
+            <option value="0">周日</option>
+          </select>
+        </label>
+        <label class="fl fls">今日色块
+          <select id="calAccent">
+            <option value="yellow">黄色</option>
+            <option value="red">红色</option>
+          </select>
+        </label>
+        <label class="fl fls">字号
+          <select id="calScale">
+            <option value="compact">紧凑</option>
+            <option value="normal">标准</option>
+            <option value="large">大</option>
+          </select>
+        </label>
+      </div>
+      <div class="row">
+        <label class="fl fls">农历
+          <select id="calLunar">
+            <option value="off">不显示</option>
+            <option value="main">月日</option>
+            <option value="full">月日 + 干支</option>
+          </select>
+        </label>
+        <label class="fl"><input type="checkbox" id="calFestDot" checked> 节日红点</label>
+        <label class="fl"><input type="checkbox" id="calFestCd" checked> 节日倒计时</label>
+      </div>
+      <div class="row">
+        <label class="fl"><input type="checkbox" id="calWeekNum" checked> 周数</label>
+        <label class="fl"><input type="checkbox" id="calRemain" checked> 剩余天数</label>
+        <label class="fl"><input type="checkbox" id="calHero" checked> 大日号</label>
+        <label class="fl"><input type="checkbox" id="calGrid" checked> 月历</label>
+        <label class="fl"><input type="checkbox" id="calWeekend" checked> 周末标红</label>
+        <label class="fl"><input type="checkbox" id="calTodayHi" checked> 今日高亮</label>
+      </div>
+      <div class="row">
+        <input type="text" id="calNote" placeholder="底部备注（可选）" maxlength="24">
+        <input type="text" id="calName" placeholder="图片名称" maxlength="24">
+      </div>
+      <div class="row">
+        <button id="calPng">下载 PNG</button>
+        <button id="calUpload" class="primary" disabled>发送到屏幕</button>
+        <span id="calHint" class="calhint"></span>
+      </div>
+      <div class="err" id="calErr"></div>
+      <canvas id="calPreview" width="552" height="768"></canvas>
+      <div class="legend">
+        <span><i id="calSw0"></i>黑</span>
+        <span><i id="calSw1"></i>白</span>
+        <span><i id="calSw2"></i>黄</span>
+        <span><i id="calSw3"></i>红</span>
+        <span>预览为四色量化结果 · 2bpp</span>
+      </div>
+      <div class="note">
+        日历是浏览器生成的静态图片，日期变化后需重新生成并上传；设备无 RTC，不会自动翻页。
+        农历与节日由浏览器内置中国历法换算，横版会顺时针旋转 90° 写入 552×768 帧，需横持设备查看。
+      </div>
+    </section>
+  </section>
+
 
   <section id="pageGallery" class="tabpage">
     <section class="panel">
@@ -527,6 +620,7 @@ function switchTab(name) {
   for (const p of document.querySelectorAll('.tabpage'))
     p.classList.toggle('active', p.id === name);
   if (name === 'pageDebug') { unread = 0; updateBadge(); }
+  if (name === 'pageCalendar') { calInit(); calRender(); }
 }
 for (const t of document.querySelectorAll('.tab'))
   t.addEventListener('click', () => switchTab(t.dataset.page));
@@ -654,6 +748,7 @@ function setConnected(on) {
   $('btnDisconnect').disabled = !on || busy;
   document.querySelectorAll('#list button').forEach(b => b.disabled = off);
   updateUpBtn();
+  updateCalBtn();
 }
 
 // 断开后的统一收尾：作废全部句柄引用，并立刻让还在等回包的 Promise 失败。
@@ -1763,6 +1858,7 @@ for (let i = 0; i < 4; i++) {
     DISPLAY_PAL[i] = e.target.value;
     try { localStorage.setItem(DISPLAY_PAL_KEY, JSON.stringify(DISPLAY_PAL)); } catch (_) {}
     syncDisplayPal();
+    if (calLabels) calPaintPreview();
     process();
   });
 }
@@ -1770,6 +1866,7 @@ $('calreset').addEventListener('click', () => {
   DISPLAY_PAL = DISPLAY_PAL_DEFAULT.slice();
   try { localStorage.removeItem(DISPLAY_PAL_KEY); } catch (_) {}
   syncDisplayPal();
+  if (calLabels) calPaintPreview();
   process();
 });
 $('calshot').addEventListener('click', () => {
@@ -1785,6 +1882,528 @@ $('calshot').addEventListener('click', () => {
   a.download = 'colorink_palette_calibration.png';
   a.click();
 });
+
+// ── 日历（四色）─────────────────────────────────────────────
+// 日历不复用照片管线：自动色阶/色域映射/误差扩散会把文字边缘糊掉。
+// 这里只做「纯四色绘制 → 中性像素黑白归并 → 最近色量化 → 共用转置打包」。
+const CAL_KEY = 'colorink_calendar_cfg_v1';
+const CAL_DEF = {
+  layout: 'portrait', follow: true, date: '', weekStart: 1,
+  accent: 'yellow', scale: 'normal', lunar: 'main',
+  festDot: true, festCd: true, weekNum: true, remain: true, hero: true,
+  grid: true, weekend: true, todayHi: true,
+  note: '', name: ''
+};
+let calCfg = Object.assign({}, CAL_DEF);
+try { Object.assign(calCfg, JSON.parse(localStorage.getItem(CAL_KEY) || '{}')); } catch (_) {}
+
+const CAL_INK = QUANT_PAL[0], CAL_WHITE = QUANT_PAL[1];
+const CAL_YELLOW = QUANT_PAL[2], CAL_RED = QUANT_PAL[3];
+let calLabels = null, calPacked = null, calFrame = null, calTimer = 0, calReady = false;
+
+function calPad2(n) { return n < 10 ? '0' + n : '' + n; }
+function calYmd(d) { return d.getFullYear() + '-' + calPad2(d.getMonth() + 1) + '-' + calPad2(d.getDate()); }
+function calTodayDate() {
+  const n = new Date();
+  return new Date(n.getFullYear(), n.getMonth(), n.getDate(), 12, 0, 0);
+}
+function calParseDate(s) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s || '');
+  if (!m) return calTodayDate();
+  return new Date(+m[1], +m[2] - 1, +m[3], 12, 0, 0);
+}
+function calDayDiff(a, b) {
+  const ua = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const ub = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((ub - ua) / 86400000);
+}
+function calWeekdayName(d) { return '周' + '日一二三四五六'[d.getDay()]; }
+function calIsoWeek(d) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = (t.getUTCDay() + 6) % 7;
+  t.setUTCDate(t.getUTCDate() - dayNum + 3);
+  const firstThursday = new Date(Date.UTC(t.getUTCFullYear(), 0, 4));
+  return 1 + Math.round((t - firstThursday) / 604800000);
+}
+
+// 浏览器内置中国历法：兼容 Chrome/Edge/Safari，拿不到就自动跳过农历
+const CAL_LUNAR_FMT = (function () {
+  try {
+    if (typeof Intl !== 'undefined' && Intl.DateTimeFormat)
+      return new Intl.DateTimeFormat('zh-CN-u-ca-chinese', { year: 'numeric', month: 'long', day: 'numeric' });
+  } catch (_) {}
+  return null;
+})();
+const CAL_LUNAR_OK = !!(CAL_LUNAR_FMT && typeof CAL_LUNAR_FMT.formatToParts === 'function');
+const CAL_LUNAR_MONTH = {
+  '正月': 1, '一月': 1, '二月': 2, '三月': 3, '四月': 4, '五月': 5, '六月': 6,
+  '七月': 7, '八月': 8, '九月': 9, '十月': 10, '十一月': 11, '冬月': 11,
+  '十二月': 12, '腊月': 12
+};
+const CAL_LUNAR_DAYS = [
+  '初一', '初二', '初三', '初四', '初五', '初六', '初七', '初八', '初九', '初十',
+  '十一', '十二', '十三', '十四', '十五', '十六', '十七', '十八', '十九', '二十',
+  '廿一', '廿二', '廿三', '廿四', '廿五', '廿六', '廿七', '廿八', '廿九', '三十'
+];
+const CAL_LUNAR_CACHE = new Map();
+
+function calLunarOf(d) {
+  if (!CAL_LUNAR_OK) return null;
+  const key = calYmd(d);
+  if (CAL_LUNAR_CACHE.has(key)) return CAL_LUNAR_CACHE.get(key);
+  let v = null;
+  try {
+    let monthName = '', day = 0, ganzhi = '', lunarYear = 0;
+    for (const p of CAL_LUNAR_FMT.formatToParts(d)) {
+      if (p.type === 'month') monthName = p.value;
+      else if (p.type === 'day') day = parseInt(p.value, 10) || 0;
+      else if (p.type === 'yearName') ganzhi = p.value;
+      else if (p.type === 'relatedYear') lunarYear = parseInt(p.value, 10) || 0;
+    }
+    const month = CAL_LUNAR_MONTH[monthName.replace(/^闰/, '')] || 0;
+    if (month && day) {
+      v = {
+        monthName, month, leap: monthName.startsWith('闰'), day,
+        dayName: CAL_LUNAR_DAYS[day - 1] || '', ganzhi, lunarYear
+      };
+    }
+  } catch (_) {}
+  if (CAL_LUNAR_CACHE.size > 4000) CAL_LUNAR_CACHE.clear();
+  CAL_LUNAR_CACHE.set(key, v);
+  return v;
+}
+
+const CAL_SOLAR_FEST = [
+  [1, 1, '元旦'], [2, 14, '情人节'], [3, 8, '妇女节'], [5, 1, '劳动节'],
+  [6, 1, '儿童节'], [9, 10, '教师节'], [10, 1, '国庆节'],
+  [12, 24, '平安夜'], [12, 25, '圣诞节']
+];
+const CAL_LUNAR_FEST = [
+  [1, 1, '春节'], [1, 15, '元宵'], [5, 5, '端午'],
+  [7, 7, '七夕'], [8, 15, '中秋'], [9, 9, '重阳']
+];
+
+function calFestivalOf(d) {
+  const m = d.getMonth() + 1, day = d.getDate();
+  for (const f of CAL_SOLAR_FEST) if (f[0] === m && f[1] === day) return f[2];
+  const l = calLunarOf(d);
+  if (!l || l.leap) return '';
+  for (const f of CAL_LUNAR_FEST) if (f[0] === l.month && f[1] === l.day) return f[2];
+  if (l.month === 12 && (l.day === 29 || l.day === 30)) {
+    const n = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1, 12);
+    const ln = calLunarOf(n);
+    if (ln && ln.month === 1 && ln.day === 1) return '除夕';
+  }
+  return '';
+}
+
+function calNextFestival(d) {
+  for (let i = 0; i <= 400; i++) {
+    const n = new Date(d.getFullYear(), d.getMonth(), d.getDate() + i, 12);
+    const f = calFestivalOf(n);
+    if (f) return { name: f, days: i };
+  }
+  return null;
+}
+
+function calSize(base) {
+  const k = { compact: 0.92, normal: 1, large: 1.06 }[calCfg.scale] || 1;
+  return Math.max(16, Math.round(base * k));
+}
+function calFont(ctx, size, weight) {
+  ctx.font = (weight || 400) + ' ' + size + 'px "PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif';
+}
+function calText(ctx, text, x, y, size, color, weight, align) {
+  calFont(ctx, size, weight);
+  ctx.fillStyle = color;
+  ctx.textAlign = align || 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(text, x, y);
+  ctx.textAlign = 'left';
+}
+function calRoundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, h, r);
+  else ctx.rect(x, y, w, h);
+  ctx.fill();
+}
+
+// 月历网格：竖版与横版共用，仅几何参数和字号不同
+function calDrawGrid(ctx, d, g) {
+  const y = d.getFullYear(), m = d.getMonth();
+  const ws = calCfg.weekStart;
+  const first = new Date(y, m, 1, 12);
+  const startCol = (first.getDay() - ws + 7) % 7;
+  const ndays = new Date(y, m + 1, 0).getDate();
+  const today = calTodayDate();
+
+  for (let i = 0; i < 7; i++) {
+    const wd = (ws + i) % 7;
+    const col = calCfg.weekend && (wd === 0 || wd === 6) ? CAL_RED : CAL_INK;
+    calText(ctx, '日一二三四五六'[wd], g.x0 + g.colW * (i + 0.5), g.headY, g.headFont, col, 600, 'center');
+  }
+
+  for (let n = 1; n <= ndays; n++) {
+    const cell = startCol + n - 1;
+    const cx = g.x0 + g.colW * (cell % 7 + 0.5);
+    const cy = g.rowY + Math.floor(cell / 7) * g.rowH;
+    const date = new Date(y, m, n, 12);
+    const wd = date.getDay();
+    const isToday = date.getFullYear() === today.getFullYear() &&
+                    date.getMonth() === today.getMonth() &&
+                    date.getDate() === today.getDate();
+    const marked = !!(calCfg.todayHi && isToday);
+    if (marked) {
+      ctx.fillStyle = calCfg.accent === 'red' ? CAL_RED : CAL_YELLOW;
+      calRoundRect(ctx, cx - g.blockW / 2, cy - g.font * 0.35 - g.blockH / 2,
+                   g.blockW, g.blockH, 8);
+    }
+    let numColor = CAL_INK;
+    if (marked) numColor = calCfg.accent === 'red' ? CAL_WHITE : CAL_INK;
+    else if (calCfg.weekend && (wd === 0 || wd === 6)) numColor = CAL_RED;
+    calText(ctx, String(n), cx, cy, g.font, numColor, marked ? 700 : 400, 'center');
+
+    if (calCfg.festDot && calFestivalOf(date)) {
+      ctx.fillStyle = marked && calCfg.accent === 'red' ? CAL_WHITE : CAL_RED;
+      ctx.beginPath();
+      ctx.arc(cx, cy + g.font * 0.28, g.dotR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function calDrawPortrait(ctx, d) {
+  const y = d.getFullYear(), m = d.getMonth() + 1, day = d.getDate();
+  const lunar = calCfg.lunar !== 'off' ? calLunarOf(d) : null;
+  const next = calCfg.festCd ? calNextFestival(d) : null;
+  const remain = calDayDiff(d, new Date(y, 11, 31, 12));
+
+  ctx.fillStyle = CAL_WHITE;
+  ctx.fillRect(0, 0, SW, SH);
+  calText(ctx, y + '年' + m + '月', 30, 68, calSize(36), CAL_INK, 700, 'left');
+  if (calCfg.weekNum)
+    calText(ctx, '第 ' + calIsoWeek(d) + ' 周', 522, 64, calSize(19), CAL_RED, 600, 'right');
+
+  if (calCfg.hero) calText(ctx, String(day), 26, 246, calSize(150), CAL_INK, 700, 'left');
+  const hx = calCfg.hero ? 230 : 30;
+  let ly = calCfg.hero ? 140 : 96;
+  calText(ctx, calWeekdayName(d), hx, ly, calSize(32), CAL_INK, 600, 'left');
+  ly += 36;
+  calText(ctx, y + '年' + m + '月' + day + '日', hx, ly, calSize(18), CAL_INK, 400, 'left');
+  ly += 32;
+  if (lunar) {
+    calText(ctx, '农历 ' + lunar.monthName + lunar.dayName +
+      (calCfg.lunar === 'full' ? ' · ' + lunar.ganzhi + '年' : ''),
+      hx, ly, calSize(18), CAL_INK, 400, 'left');
+    ly += 32;
+  }
+  if (calCfg.remain) {
+    calText(ctx, '今年剩余 ' + remain + ' 天', hx, ly, calSize(21), CAL_RED, 700, 'left');
+    ly += 32;
+  }
+  if (next) {
+    calText(ctx, next.days === 0 ? '今日 ' + next.name : '距 ' + next.name + ' 还有 ' + next.days + ' 天',
+      hx, ly, calSize(17), CAL_RED, 500, 'left');
+  }
+
+  ctx.fillStyle = CAL_INK;
+  ctx.fillRect(30, 288, 492, 3);
+
+  if (calCfg.grid) {
+    calDrawGrid(ctx, d, {
+      x0: 30, colW: (SW - 60) / 7, headY: 330, rowY: 376, rowH: 62,
+      headFont: calSize(20), font: calSize(26),
+      blockW: calSize(58), blockH: calSize(52), dotR: 3
+    });
+  }
+  if (calCfg.note.trim()) {
+    calText(ctx, calCfg.note.trim(), SW / 2, 744, calSize(16), CAL_INK, 400, 'center');
+  }
+}
+
+function calDrawLandscape(ctx, d) {
+  const y = d.getFullYear(), m = d.getMonth() + 1, day = d.getDate();
+  const lunar = calCfg.lunar !== 'off' ? calLunarOf(d) : null;
+  const next = calCfg.festCd ? calNextFestival(d) : null;
+  const remain = calDayDiff(d, new Date(y, 11, 31, 12));
+
+  ctx.fillStyle = CAL_WHITE;
+  ctx.fillRect(0, 0, SH, SW);
+  calText(ctx, y + '年' + m + '月', 30, 54, calSize(34), CAL_INK, 700, 'left');
+  if (calCfg.weekNum)
+    calText(ctx, '第 ' + calIsoWeek(d) + ' 周', 738, 50, calSize(18), CAL_RED, 600, 'right');
+
+  if (calCfg.hero) calText(ctx, String(day), 28, 176, calSize(120), CAL_INK, 700, 'left');
+  const hx = calCfg.hero ? 180 : 30;
+  let ly = calCfg.hero ? 104 : 80;
+  calText(ctx, calWeekdayName(d), hx, ly, calSize(30), CAL_INK, 600, 'left');
+  ly += 30;
+  calText(ctx, y + '年' + m + '月' + day + '日', hx, ly, calSize(18), CAL_INK, 400, 'left');
+  ly += 28;
+  if (lunar) {
+    calText(ctx, '农历 ' + lunar.monthName + lunar.dayName +
+      (calCfg.lunar === 'full' ? ' · ' + lunar.ganzhi + '年' : ''),
+      hx, ly, calSize(18), CAL_INK, 400, 'left');
+    ly += 28;
+  }
+  if (calCfg.remain) {
+    calText(ctx, '今年剩余 ' + remain + ' 天', hx, ly, calSize(20), CAL_RED, 700, 'left');
+    ly += 28;
+  }
+  if (next) {
+    calText(ctx, next.days === 0 ? '今日 ' + next.name : '距 ' + next.name + ' 还有 ' + next.days + ' 天',
+      hx, ly, calSize(17), CAL_RED, 500, 'left');
+  }
+
+  ctx.fillStyle = CAL_INK;
+  ctx.fillRect(30, 236, 708, 3);
+
+  if (calCfg.grid) {
+    calDrawGrid(ctx, d, {
+      x0: 30, colW: (SH - 60) / 7, headY: 268, rowY: 306, rowH: 42,
+      headFont: calSize(18), font: calSize(22),
+      blockW: calSize(64), blockH: calSize(34), dotR: 2.5
+    });
+  }
+  if (calCfg.note.trim()) {
+    calText(ctx, calCfg.note.trim(), SH / 2, 542, calSize(16), CAL_INK, 400, 'center');
+  }
+}
+
+function calComposeFrame(d) {
+  const frame = document.createElement('canvas');
+  frame.width = SW; frame.height = SH;
+  const fc = frame.getContext('2d');
+  fc.fillStyle = CAL_WHITE;
+  fc.fillRect(0, 0, SW, SH);
+  if (calCfg.layout === 'landscape') {
+    const raw = document.createElement('canvas');
+    raw.width = SH; raw.height = SW;
+    calDrawLandscape(raw.getContext('2d'), d);
+    fc.imageSmoothingEnabled = false;
+    fc.save();
+    fc.translate(SW, 0);
+    fc.rotate(Math.PI / 2);
+    fc.drawImage(raw, 0, 0);
+    fc.restore();
+  } else {
+    calDrawPortrait(fc, d);
+  }
+  return frame;
+}
+
+// 文字专用量化：中性像素只判黑/白，彩色像素取最近四色，不做抖动
+function calQuantize(frame) {
+  const px = frame.getContext('2d').getImageData(0, 0, SW, SH).data;
+  const labels = new Uint8Array(PIXELS);
+  for (let i = 0, p = 0; i < PIXELS; i++, p += 4) {
+    const q = rgbToOklab(px[p], px[p + 1], px[p + 2]);
+    const L = q[0], a = q[1], b = q[2];
+    let k;
+    if (Math.sqrt(a * a + b * b) < 0.03) {
+      k = L > 0.55 ? 1 : 0;
+    } else {
+      let best = 0, bestD = Infinity;
+      for (let c = 0; c < 4; c++) {
+        const t = QUANT_OK[c];
+        const dl = L - t[0], da = a - t[1], db = b - t[2];
+        const dist = dl * dl + da * da + db * db;
+        if (dist < bestD) { bestD = dist; best = c; }
+      }
+      k = best;
+    }
+    labels[i] = k;
+  }
+  return labels;
+}
+
+function calPackLabels(labels) {
+  const buf = new Uint8Array(FRAME_BYTES);
+  for (let y = 0; y < SH; y++) {
+    for (let x = 0; x < SW; x++) {
+      const dx = (SH - 1) - y;
+      const byteI = x * ROW_BYTES + (dx >> 2);
+      buf[byteI] |= CODES[labels[y * SW + x]] << (6 - ((dx & 3) << 1));
+    }
+  }
+  return buf;
+}
+
+function calSyncSwatches() {
+  DISPLAY_PAL.forEach((h, i) => {
+    const el = $('calSw' + i);
+    if (el) el.style.background = h;
+  });
+}
+
+function calPaintPreview() {
+  if (!calLabels) return;
+  const ctx = $('calPreview').getContext('2d');
+  const img = new ImageData(SW, SH);
+  const d = img.data;
+  const pal = DISPLAY_PAL.map(hexToRgb);
+  for (let i = 0, p = 0; i < PIXELS; i++, p += 4) {
+    const c = pal[calLabels[i]];
+    d[p] = c[0]; d[p + 1] = c[1]; d[p + 2] = c[2]; d[p + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  calSyncSwatches();
+}
+
+function calAutoName(d) {
+  return '日历 ' + calYmd(d) + (calCfg.layout === 'landscape' ? ' 横' : '');
+}
+
+function calUpdateHint(d) {
+  const bits = [];
+  bits.push(calCfg.layout === 'landscape'
+    ? '横版 768×552 → 顺时针旋转 90° 写入帧，需横持设备查看'
+    : '竖版 552×768');
+  if (calCfg.lunar !== 'off') {
+    const l = calLunarOf(d);
+    if (!CAL_LUNAR_OK) bits.push('浏览器不支持农历，已跳过');
+    else if (l) bits.push('农历 ' + l.monthName + l.dayName + (calCfg.lunar === 'full' ? ' · ' + l.ganzhi + '年' : ''));
+  }
+  bits.push('静态图片，日期变化需重新生成上传');
+  $('calHint').textContent = bits.join(' · ');
+}
+
+function calCollect() {
+  return {
+    layout: $('calLayout').value,
+    follow: $('calFollow').checked,
+    date: $('calDate').value,
+    weekStart: parseInt($('calWeekStart').value, 10),
+    accent: $('calAccent').value,
+    scale: $('calScale').value,
+    lunar: $('calLunar').value,
+    festDot: $('calFestDot').checked,
+    festCd: $('calFestCd').checked,
+    weekNum: $('calWeekNum').checked,
+    remain: $('calRemain').checked,
+    hero: $('calHero').checked,
+    grid: $('calGrid').checked,
+    weekend: $('calWeekend').checked,
+    todayHi: $('calTodayHi').checked,
+    note: $('calNote').value.slice(0, 24),
+    name: $('calName').value.slice(0, 24)
+  };
+}
+
+function calEffectiveDate() {
+  if (calCfg.follow) return calTodayDate();
+  return calParseDate(calCfg.date || $('calDate').value);
+}
+
+function calSave() {
+  try { localStorage.setItem(CAL_KEY, JSON.stringify(calCfg)); } catch (_) {}
+}
+
+function calRender() {
+  if (!calReady) return;
+  const err = $('calErr');
+  err.textContent = '';
+  try {
+    calCfg = calCollect();
+    calSave();
+    const d = calEffectiveDate();
+    calFrame = calComposeFrame(d);
+    calLabels = calQuantize(calFrame);
+    calPacked = calPackLabels(calLabels);
+    calPaintPreview();
+    calUpdateHint(d);
+    $('calName').placeholder = calAutoName(d);
+  } catch (e) {
+    calPacked = null;
+    calFrame = null;
+    calLabels = null;
+    err.textContent = '日历生成失败：' + e.message;
+    console.error(e);
+  }
+  updateCalBtn();
+}
+
+function calScheduleRender() {
+  clearTimeout(calTimer);
+  calTimer = setTimeout(calRender, 80);
+}
+
+function calDownload() {
+  if (!calLabels) return;
+  const c = document.createElement('canvas');
+  c.width = SW; c.height = SH;
+  const ctx = c.getContext('2d');
+  const img = new ImageData(SW, SH);
+  const data = img.data;
+  for (let i = 0, p = 0; i < PIXELS; i++, p += 4) {
+    const rgb = QUANT_RGB[calLabels[i]];
+    data[p] = rgb[0]; data[p + 1] = rgb[1]; data[p + 2] = rgb[2]; data[p + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const d = calEffectiveDate();
+  const a = document.createElement('a');
+  a.href = c.toDataURL('image/png');
+  a.download = 'colorink_calendar_' + calYmd(d) + (calCfg.layout === 'landscape' ? '_landscape' : '_portrait') + '.png';
+  a.click();
+}
+
+function calApplyCfg() {
+  $('calLayout').value = calCfg.layout;
+  $('calWeekStart').value = String(calCfg.weekStart);
+  $('calAccent').value = calCfg.accent;
+  $('calScale').value = calCfg.scale;
+  $('calLunar').value = calCfg.lunar;
+  $('calFestDot').checked = !!calCfg.festDot;
+  $('calFestCd').checked = !!calCfg.festCd;
+  $('calWeekNum').checked = !!calCfg.weekNum;
+  $('calRemain').checked = !!calCfg.remain;
+  $('calHero').checked = !!calCfg.hero;
+  $('calGrid').checked = !!calCfg.grid;
+  $('calWeekend').checked = !!calCfg.weekend;
+  $('calTodayHi').checked = !!calCfg.todayHi;
+  $('calFollow').checked = !!calCfg.follow;
+  $('calNote').value = calCfg.note || '';
+  $('calName').value = calCfg.name || '';
+  $('calDate').value = calCfg.follow ? calYmd(calTodayDate()) : (calCfg.date || calYmd(calTodayDate()));
+  $('calDate').disabled = !!calCfg.follow;
+}
+
+function calInit() {
+  if (calReady) return;
+  calReady = true;
+  calApplyCfg();
+  const ids = ['calLayout', 'calDate', 'calWeekStart', 'calAccent', 'calScale', 'calLunar',
+               'calFestDot', 'calFestCd', 'calWeekNum', 'calRemain', 'calHero', 'calGrid',
+               'calWeekend', 'calTodayHi', 'calNote', 'calName'];
+  for (const id of ids) {
+    const el = $(id);
+    const ev = (el.tagName === 'SELECT' || el.type === 'checkbox') ? 'change' : 'input';
+    el.addEventListener(ev, calScheduleRender);
+  }
+  $('calFollow').addEventListener('change', () => {
+    $('calDate').disabled = $('calFollow').checked;
+    if ($('calFollow').checked) $('calDate').value = calYmd(calTodayDate());
+    calScheduleRender();
+  });
+  $('calToday').addEventListener('click', () => {
+    $('calFollow').checked = true;
+    $('calDate').disabled = true;
+    $('calDate').value = calYmd(calTodayDate());
+    calScheduleRender();
+  });
+  $('calPng').addEventListener('click', calDownload);
+  $('calUpload').addEventListener('click', () => {
+    if (!calPacked) return;
+    const fallback = calAutoName(calEffectiveDate());
+    guarded(() => uploadImage(safeName($('calName').value, fallback), calPacked, $('calUpload')));
+  });
+  calSyncSwatches();
+}
+
+function updateCalBtn() {
+  const b = $('calUpload');
+  if (b) b.disabled = !(calPacked && connected && !busy);
+}
 
 // ── 上传（BLE 通道）──────────────────────────────────────────
 // 名称只留可打印字符 / 中文，禁 ':'（固件按最后一个 ':' 切分数字，但别考验它）
@@ -1876,6 +2495,10 @@ async function uploadImage(name, buf, btn) {
     await refreshList();
     labelBtn.textContent = '刷新中…';
     await displayImage(id);
+  } catch (e) {
+    // 传输异常时主动中止，避免固件 uploading 标志一直挂起
+    try { await writeCmd('abort'); } catch (_) {}
+    throw e;
   } finally {
     labelBtn.textContent = origLabel;
   }
@@ -1952,9 +2575,10 @@ $('btnUpload').addEventListener('click', () => {
 $('btnTestImg').addEventListener('click', () =>
   guarded(() => uploadImage(safeName($('iname').value, 'test'), makeTestImage(), $('btnTestImg'))));
 $('btnSelfTest').addEventListener('click', () => guarded(selfTest));
+calInit();
 
-const PAGE_VER = '2026-10-30a'; // 每次改本页都改这里：用来确认浏览器加载的不是缓存旧版
-log('页面就绪 v' + PAGE_VER + '。蓝牙连接（手机/电脑）或串口连接（电脑 Chrome/Edge）→ 上传页选图转四色并显示，图库页管理已传图片，调试页看日志。');
+const PAGE_VER = '2026-10-30b'; // 每次改本页都改这里：用来确认浏览器加载的不是缓存旧版
+log('页面就绪 v' + PAGE_VER + '。蓝牙连接（手机/电脑）或串口连接（电脑 Chrome/Edge）→ 上传页选图转四色并显示，日历页生成并下发日历，图库页管理已传图片，调试页看日志。');
 log('本地试跑：在本目录执行 python -m http.server 8000，然后开 http://localhost:8000/ble_test.html');
 log('（http://localhost 也算安全上下文，Web Bluetooth / Web Serial 都能直接用）', 'dim');
 unread = 0; updateBadge(); // 启动提示不算未读，徽标只统计连接后的重要事件
