@@ -17,6 +17,7 @@
 #include "storage.h"
 #include "gallery.h"
 #include "epd_driver.h"
+#include "serial_service.h"
 
 #ifdef INKSIGHT_BLE
 #include "ble_service.h"
@@ -334,7 +335,7 @@ static void logHeap()
 void setup()
 {
     unsigned long bootT0 = millis();
-    Serial.begin(115200);
+    serialServiceBegin(115200);
     delay(150);
     Serial.printf("\n[BOOT] ColorInk LAN gallery  %s %s\n", __DATE__, __TIME__);
     Serial.printf("[BOOT] free heap: %u\n", (unsigned)ESP.getFreeHeap());
@@ -392,6 +393,7 @@ void loop()
 {
 #ifdef INKSIGHT_BLE
     bleModeLoop(); // 把 GATT 回调排队的回包发出去
+    serialServiceLoop(); // 网页串口通道：同一固件另开一条 USB 串口上传
     handleButton();
     logHeap();
     delay(2); // C3 单核：让出 CPU 给 idle 和 NimBLE 主机任务
@@ -400,12 +402,14 @@ void loop()
     if (portalActive)
     {
         handlePortalClients();
+        serialServiceLoop(); // 配网期间也能用 USB 串口传图
         checkPortalTimeout();
         delay(2); // 配网时射频常开 + modem sleep 关闭，CPU 再空转就是纯加热
         return;
     }
     webappHandle();
     webappProcessPending(); // 执行网页排队的刷屏/清屏（~15s，期间泵 HTTP 服务）
+    serialServiceLoop();    // 网页串口通道：USB 串口上传/显示/删除
     handleWiFiWatchdog();
     handleButton();
     logHeap();

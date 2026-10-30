@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#14161a">
-<title>ColorInk 蓝牙图库</title>
+<title>ColorInk 图库（蓝牙 / 串口）</title>
 <style>
   :root {
     color-scheme: dark;
@@ -30,22 +30,38 @@
   }
   .wrap { max-width: 920px; margin: 0 auto; }
 
-  /* ── 页头 ───────────────────────────────────────────── */
-  header { padding: 30px 0 20px; border-bottom: 1px solid var(--line); margin-bottom: 20px; }
-  h1 { font-size: 20px; margin: 0 0 5px; letter-spacing: .3px; }
+  /* ── 页头：标题与副标题同一行，压缩高度 ─────────────── */
+  header {
+    display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px;
+    padding: 14px 0 11px; border-bottom: 1px solid var(--line); margin-bottom: 14px;
+  }
+  h1 { font-size: 19px; margin: 0; letter-spacing: .3px; }
   .sub { color: var(--dim); font-size: 12.5px; }
 
-  /* ── 提示条 ─────────────────────────────────────────── */
-  .warn {
-    background: #2a2113; border: 1px solid #3d3016; border-left: 3px solid #d9a03a;
-    padding: 12px 14px; color: #e8c88a; font-size: 12.5px; border-radius: 6px;
-    margin: 0 0 20px;
+  /* ── 首次访问提示弹窗 ───────────────────────────────── */
+  .modal-mask {
+    position: fixed; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center;
+    padding: 20px; background: rgba(5, 7, 9, .72); backdrop-filter: blur(2px);
   }
-  .warn b { color: #f2d79c; }
-  .warn code {
-    background: #3a2f1c; padding: 1px 5px; border-radius: 3px;
-    font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+  .modal-mask[hidden] { display: none; }
+  .modal {
+    width: min(460px, 100%); max-height: calc(100vh - 40px); overflow: auto;
+    background: var(--panel); border: 1px solid var(--line-strong); border-radius: 12px;
+    padding: 18px 18px 14px; box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
   }
+  .modal-head {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 14px; font-weight: 600; margin-bottom: 10px;
+  }
+  .modal-head .dot {
+    width: 7px; height: 7px; border-radius: 50%; background: var(--primary); flex: none;
+  }
+  .modal-body { font-size: 12.5px; color: var(--dim); line-height: 1.7; }
+  .modal-body p { margin: 0 0 8px; }
+  .modal-body p:last-child { margin: 0; }
+  .modal-body b { color: #f2d79c; }
+  .modal-foot { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+  .nomore { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--dim); cursor: pointer; }
 
   /* ── 分区面板 ───────────────────────────────────────── */
   .panel {
@@ -131,7 +147,7 @@
   #drop.hover { border-color: var(--primary); color: var(--text); background: var(--panel-hi); }
   #preview {
     max-width: 100%; max-height: 65vh; border: 1px solid var(--line-strong); border-radius: 8px;
-    background: #fff; image-rendering: pixelated; display: none; margin-top: 12px;
+    background: #fff; image-rendering: pixelated; display: none; margin: 12px auto 0;
     cursor: grab; user-select: none; -webkit-user-select: none; touch-action: none;
   }
   #preview.dragging { cursor: grabbing; }
@@ -207,8 +223,9 @@
 
   @media (max-width: 560px) {
     body { padding: 0 14px calc(36px + env(safe-area-inset-bottom)); }
-    header { padding: 20px 0 14px; margin-bottom: 14px; }
-    h1 { font-size: 18px; }
+    header { padding: 10px 0 9px; margin-bottom: 10px; }
+    h1 { font-size: 17px; }
+    .sub { font-size: 11.5px; }
 
     .panel { padding: 13px 13px 15px; margin-bottom: 13px; }
     .panel-head { margin-bottom: 12px; }
@@ -246,7 +263,12 @@
     #iname { flex: none; width: 100%; }
 
     #drop { padding: 30px 14px; }
-    #preview { max-height: 60vh; max-height: 60dvh; }
+    /* 控件移到预览上方后，移动端把预览压到半屏，参数和效果能一起看到 */
+    #preview { max-height: 52vh; max-height: 52dvh; }
+
+    /* 提示弹窗：避免贴边，勾选框与按钮两端分布 */
+    .modal { padding: 16px 15px 13px; }
+    .modal-foot { justify-content: space-between; }
 
     /* 图库卡片：名称一行，大小+按钮一行 */
     .card { flex-wrap: wrap; row-gap: 9px; padding: 11px 12px; }
@@ -268,16 +290,28 @@
 <div class="wrap">
   <header>
     <h1>ColorInk</h1>
-    <div class="sub">Web 蓝牙直连，无需 WiFi</div>
+    <div class="sub">Web 蓝牙 / USB 串口直连，无需 WiFi</div>
   </header>
 
-  <p class="warn">
-    ios 需用 <b>Bluefy</b> 浏览器打开，并全程保持本页在前台——切到后台 BLE 连接会在几十秒内断开。
-  </p>
+  <div id="tipMask" class="modal-mask" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tipTitle">
+      <div class="modal-head"><span class="dot"></span><span id="tipTitle">使用提示</span></div>
+      <div class="modal-body">
+        <p>ios 蓝牙需用 <b>Bluefy</b> 浏览器打开，并全程保持本页在前台——切到后台 BLE 连接会在几十秒内断开。</p>
+        <p>USB 串口需用电脑版 <b>Chrome / Edge</b>（同样是 https 或 localhost 才能拿到串口权限）。</p>
+      </div>
+      <div class="modal-foot">
+        <label class="nomore"><input type="checkbox" id="tipNoMore"> 不再弹出</label>
+        <span class="sp"></span>
+        <button id="tipClose" class="primary">知道了</button>
+      </div>
+    </div>
+  </div>
 
   <section class="panel">
     <div class="row">
-      <button id="btnConnect" class="primary">连接设备</button>
+      <button id="btnConnect" class="primary">蓝牙连接</button>
+      <button id="btnSerial">串口连接</button>
       <button id="btnDisconnect" disabled>断开</button>
       <span class="sp"></span>
       <span id="status"></span>
@@ -295,14 +329,7 @@
       <div class="panel-head"><span class="dot"></span>图片转换与上传</div>
       <div id="drop">点击选择图片，或把图片拖到这里<br><span style="font-size:12px">支持 JPG / PNG / WebP，浏览器本地完成四色转换</span></div>
       <input type="file" id="file" accept="image/jpeg,image/png,image/webp" style="display:none">
-      <canvas id="preview" width="552" height="768"></canvas>
-      <div id="posrow">
-        <span class="pill">X <span id="posx">0</span></span>
-        <span class="pill">Y <span id="posy">0</span></span>
-        <button id="posreset">居中</button>
-        <span>在预览上按住拖动可调整位置</span>
-      </div>
-      <div class="row">
+      <div class="row" style="margin-top:12px">
         <label class="fl fls">旋转
           <select id="rot">
             <option value="0">0°</option>
@@ -329,11 +356,29 @@
         <label class="fl"><input type="checkbox" id="vivid"> 轻度鲜艳</label>
       </div>
       <div class="row">
+        <label class="fl fls">色彩
+          <select id="cmap">
+            <option value="natural">自然增强 · 只提暖色（推荐）</option>
+            <option value="adaptive">全局暖化 · 红黄最多</option>
+            <option value="gray">纯灰度 · 文档线稿</option>
+            <option value="naive">不做映射 · 原始四色</option>
+          </select>
+        </label>
+        <label class="fl"><input type="checkbox" id="autolev" checked> 自动色阶</label>
+      </div>
+      <div class="row">
         <input type="text" id="iname" placeholder="图片名称（可选）" maxlength="24">
         <button id="btnUpload" disabled>上传并显示</button>
         <button id="btnTestImg" disabled>四色测试图</button>
       </div>
       <div class="err" id="perr"></div>
+      <canvas id="preview" width="552" height="768"></canvas>
+      <div id="posrow">
+        <span class="pill">X <span id="posx">0</span></span>
+        <span class="pill">Y <span id="posy">0</span></span>
+        <button id="posreset">居中</button>
+        <span>在预览上按住拖动可调整位置</span>
+      </div>
       <div class="legend">
         <span><i id="sw0"></i>黑</span>
         <span><i id="sw1"></i>白</span>
@@ -343,8 +388,9 @@
       </div>
       <div class="note">
         当前量化使用「理想四色」；下面的色板只用于浏览器预览和校准，不改变四色边界。
-        算法使用真实图像边缘进行对比度感知误差扩散，并对中性灰限制为黑/白，
-        减少白字红边、白脸黄边和黑色线稿串色。
+        四种墨水实际只能混出红→黄暖色带（蓝/青/绿无法叠加出来），所以先按亮度做自动色阶，
+        再按「色彩」策略把颜色映射进暖色带，最后用真实图像边缘做对比度感知误差扩散，
+        并对中性灰限制为黑/白，减少白字红边、白脸黄边和黑色线稿串色。
       </div>
       <details class="cal">
         <summary>显示色板校准（仅影响预览）</summary>
@@ -406,7 +452,8 @@ const CMD  = '8e7a0002-9f3b-4b1e-8a55-1a2b3c4d5e6f';
 const DATA = '8e7a0003-9f3b-4b1e-8a55-1a2b3c4d5e6f';
 const STAT = '8e7a0004-9f3b-4b1e-8a55-1a2b3c4d5e6f';
 
-const ACK_STEP  = 8192;    // 流控确认间隔，必须与固件 ACK_STEP 一致
+const ACK_STEP  = 8192;    // BLE 流控确认间隔，必须与固件 ACK_STEP 一致
+const SERIAL_ACK_STEP = 4096; // 串口确认间隔，必须与 serial_service.cpp 一致
 const IMG_BYTES = 105984;  // 552x768 四色 2bpp 的真实图片体积
 const MAX_CHUNK = 509;     // MTU 512 时的单包有效载荷上限，兜底封顶
 const DISPLAY_MS = 40000;  // 刷屏一次要 ~15s，等待 done 的超时要留足
@@ -429,6 +476,28 @@ try {
 
 const logEl = document.getElementById('log');
 const $ = id => document.getElementById(id);
+
+// ── 首次访问提示弹窗 ────────────────────────────────────────
+// 勾选「不再弹出」后写入 localStorage；未勾选则每次访问都提示。
+const TIP_KEY = 'colorink_tip_hidden_v1';
+(function setupTip() {
+  let hidden = false;
+  try { hidden = localStorage.getItem(TIP_KEY) === '1'; } catch (_) {}
+  if (hidden) return;
+  const mask = $('tipMask');
+  mask.hidden = false;
+  $('tipNoMore').addEventListener('change', e => {
+    try {
+      if (e.target.checked) localStorage.setItem(TIP_KEY, '1');
+      else localStorage.removeItem(TIP_KEY);
+    } catch (_) {}
+  });
+  $('tipClose').addEventListener('click', () => { mask.hidden = true; });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !mask.hidden) mask.hidden = true;
+  });
+  $('tipClose').focus();
+})();
 
 function log(text, cls) {
   const t = new Date().toTimeString().slice(0, 8);
@@ -490,6 +559,11 @@ let chCmd = null, chData = null, chStat = null;
 let mtu = 23;
 let noResp = false;
 let busy = false;
+let link = null;           // 'ble' | 'serial'
+let connected = false;
+let chunkSize = MAX_CHUNK; // 单次写入的数据块大小
+let serialPort = null, serialWriter = null, serialReader = null, serialBuf = '';
+const SERIAL_CHUNK = 4096; // 串口单包，远大于 BLE 的 MTU 限制
 const waiters = [];
 
 // ── 通知等待 ────────────────────────────────────────────────
@@ -509,13 +583,13 @@ function waitFor(pred, ms, label) {
   });
 }
 
-function onStat(ev) {
-  const dv = ev.target.value;
-  const raw = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
-  const text = new TextDecoder().decode(raw);
-  if (text.startsWith('chunk:')) {
+// 所有回包（BLE 通知 / 串口行）统一从这里分发。raw 只有 BLE 的分片列表用得到。
+function notify(text, raw) {
+  if (text.startsWith('chunk:') && raw) {
     const i = text.indexOf(':', 6);
     log('← ' + text.slice(0, i) + ':<' + (raw.length - i - 1) + ' 字节>', 'dim');
+  } else if (text.startsWith('list:')) {
+    log('← list:<' + (text.length - 5) + ' 字节 JSON>', 'dim');
   } else {
     log('← ' + text, 'dim');
   }
@@ -529,18 +603,46 @@ function onStat(ev) {
   }
 }
 
+function onStat(ev) {
+  const dv = ev.target.value;
+  const raw = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+  notify(new TextDecoder().decode(raw), raw);
+}
+
+// 串口回包：设备把协议行写成 "CI:<payload>"，其它行是设备日志。
+function onSerialLine(line) {
+  if (line.startsWith('CI:')) notify(line.slice(3), null);
+  else log('设备 ' + line, 'dim');
+}
+
 // ── 写入 ────────────────────────────────────────────────────
 async function writeCmd(s) {
-  const bytes = new TextEncoder().encode(s);
   log('→ CMD ' + s, 'dim');
+  if (link === 'serial') {
+    if (!serialWriter) throw new Error('串口未打开');
+    await serialWriter.write(new TextEncoder().encode('CI:' + s + '\n'));
+    return;
+  }
+  const bytes = new TextEncoder().encode(s);
   if (typeof chCmd.writeValueWithResponse === 'function') await chCmd.writeValueWithResponse(bytes);
   else await chCmd.writeValue(bytes); // 旧实现兜底
+}
+
+// 图片裸字节：串口直接写，BLE 按特征值写入方式分流
+async function sendData(slice) {
+  if (link === 'serial') {
+    if (!serialWriter) throw new Error('串口未打开');
+    await serialWriter.write(slice);
+    return;
+  }
+  if (noResp) await chData.writeValueWithoutResponse(slice);
+  else await chData.writeValueWithResponse(slice);
 }
 
 // ── 连接 ────────────────────────────────────────────────────
 // 上传按钮取决于「已连接 + 已有打包结果」，单独管理
 function updateUpBtn() {
-  $('btnUpload').disabled = !(packed && server && server.connected && !busy);
+  $('btnUpload').disabled = !(packed && connected && !busy);
 }
 
 function setConnected(on) {
@@ -548,6 +650,7 @@ function setConnected(on) {
   for (const id of ['btnInfo', 'btnList', 'btnClear', 'btnTestImg', 'btnSelfTest'])
     $(id).disabled = off;
   $('btnConnect').disabled = on || busy;
+  $('btnSerial').disabled = on || busy;
   $('btnDisconnect').disabled = !on || busy;
   document.querySelectorAll('#list button').forEach(b => b.disabled = off);
   updateUpBtn();
@@ -563,6 +666,7 @@ function teardown(reason) {
   chStat = null;
   mtu = 23;
   noResp = false;
+  connected = false;
   for (const w of waiters.splice(0, waiters.length)) {
     clearTimeout(w.timer);
     w.reject(new Error(reason || '连接已断开'));
@@ -574,6 +678,7 @@ function onGattDisconnected(ev) {
   // 主动 disconnect() 会先调 teardown（server 已置空），据此区分是不是意外掉线
   const unexpected = server !== null;
   teardown('连接已断开');
+  link = null;
   setConnected(false);
   if (unexpected) report('设备已断开（链路已失效，请重新连接）', 'bad');
   else report('已断开连接', 'dim');
@@ -585,12 +690,16 @@ async function connect() {
     return;
   }
 
+  // 切到蓝牙前先放开串口，两条链路不能同时占着设备
+  await closeSerial(true);
+  teardown(null);
+  link = null;
+
   // 同一次页面会话内重复连接：先释放上一次的句柄，绝不复用。
   if (device && device.gatt.connected) {
     log('释放上一次的连接…', 'dim');
     device.gatt.disconnect();
   }
-  teardown(null);
 
   log('请求设备…（弹出的列表里选 ColorInk-XXXX）');
   try {
@@ -621,6 +730,8 @@ async function connect() {
     await pong;
     log('✓ 命令通道往返正常', 'ok');
 
+    link = 'ble';
+    connected = true;
     setConnected(true);
     await queryInfo();
     await refreshList();
@@ -628,6 +739,7 @@ async function connect() {
     // 半途失败也要清干净：否则状态停在"device/server 非空但全是死的"，
     // 下一次连接继续踩同一个坑。
     teardown('连接失败');
+    link = null;
     setConnected(false);
     if (/disconnected/i.test(err.message || '')) {
       log('提示：链路多半还被宿主端的 GATT 缓存占着。关掉其它开着本页的标签页、' +
@@ -645,24 +757,163 @@ function disconnect() {
   // 先收尾再断：这样 gattserverdisconnected 回调里能看出是主动断开，
   // 不会把它误报成意外的红字掉线。
   teardown('已主动断开');
+  link = null;
   if (linked) device.gatt.disconnect();
   setConnected(false);
   if (!linked) log('当前没有已连接的设备', 'dim');
+}
+
+// ── 串口连接（Web Serial）────────────────────────────────────
+// 设备端 serial_service.cpp 用 "CI:" 开头的行做命令与回包，图片数据在
+// begin 之后直接以裸字节写入，所以这里只按行解析回包、按块写数据。
+async function closeSerial(silent) {
+  const port = serialPort;
+  const reader = serialReader;
+  const writer = serialWriter;
+  serialPort = null;
+  serialReader = null;
+  serialWriter = null;
+  serialBuf = '';
+  if (reader) {
+    try { await reader.cancel(); } catch (_) {}
+    // 读取循环会在 cancel 后释放 reader 锁，等它一拍再关端口
+    await new Promise(r => setTimeout(r, 60));
+  }
+  if (writer) { try { writer.releaseLock(); } catch (_) {} }
+  if (port) { try { await port.close(); } catch (_) {} }
+  if (!silent) report('已断开串口', 'dim');
+}
+
+function handleSerialClosed() {
+  serialPort = null;
+  serialReader = null;
+  if (serialWriter) { try { serialWriter.releaseLock(); } catch (_) {} }
+  serialWriter = null;
+  link = null;
+  teardown('串口已断开');
+  setConnected(false);
+  report('串口连接已断开（请重新连接）', 'bad');
+}
+
+async function serialReadLoop(port) {
+  const dec = new TextDecoder();
+  let stop = false;
+  try {
+    while (!stop && port.readable) {
+      const reader = port.readable.getReader();
+      serialReader = reader;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) { stop = true; break; }
+          serialBuf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = serialBuf.indexOf('\n')) >= 0) {
+            const line = serialBuf.slice(0, i).replace(/\r$/, '');
+            serialBuf = serialBuf.slice(i + 1);
+            if (line) onSerialLine(line);
+          }
+        }
+      } catch (err) {
+        if (serialPort) log('串口读取中断：' + (err.message || err), 'bad');
+      } finally {
+        serialReader = null;
+        try { reader.releaseLock(); } catch (_) {}
+      }
+    }
+  } finally {
+    if (serialPort === port) handleSerialClosed();
+  }
+}
+
+async function connectSerial() {
+  if (!('serial' in navigator)) {
+    log('✗ 拿不到 navigator.serial：请用电脑版 Chrome / Edge，并通过 https:// 或 localhost 打开本页', 'bad');
+    return;
+  }
+
+  // 蓝牙链路先让位
+  if (link === 'ble') {
+    teardown('切换到串口');
+    try { if (device && device.gatt.connected) device.gatt.disconnect(); } catch (_) {}
+  }
+  await closeSerial(true);
+  teardown(null);
+  link = null;
+
+  let port = null;
+  try {
+    port = await navigator.serial.requestPort();
+  } catch (err) {
+    if (err && err.name === 'NotFoundError') { log('已取消选择串口', 'dim'); return; }
+    throw err;
+  }
+
+  log('打开串口…（115200，设备端单包 ' + SERIAL_CHUNK + ' 字节）');
+  try {
+    await port.open({ baudRate: 115200 });
+    serialPort = port;
+    serialWriter = port.writable.getWriter();
+    serialBuf = '';
+    link = 'serial';
+    chunkSize = SERIAL_CHUNK;
+    serialReadLoop(port);
+
+    const pong = waitFor(t => t === 'pong', 3000, 'pong');
+    await writeCmd('ping');
+    await pong;
+    log('✓ 串口命令通道往返正常', 'ok');
+
+    connected = true;
+    setConnected(true);
+    const info = port.getInfo ? port.getInfo() : {};
+    report('已连接：USB 串口' + (info.usbVendorId
+      ? ' (' + info.usbVendorId.toString(16) + ':' + (info.usbProductId || 0).toString(16) + ')'
+      : ''), 'ok');
+    await queryInfo();
+    await refreshList();
+  } catch (err) {
+    await closeSerial(true);
+    teardown('串口连接失败');
+    link = null;
+    setConnected(false);
+    if (/failed to open|access denied/i.test(err.message || '')) {
+      log('提示：串口被占用。关掉 Arduino 串口监视器、platformio device monitor 或其它占用本串口的程序再试。', 'dim');
+    } else if (/timeout|超时/i.test(err.message || '')) {
+      log('提示：没收到 pong。确认烧的是本仓库固件、波特率 115200，并换一条能传数据的 USB 线。', 'dim');
+    }
+    throw err;
+  }
 }
 
 async function queryInfo() {
   const p = waitFor(t => t.startsWith('info:'), 3000, 'info');
   await writeCmd('info');
   const f = (await p).split(':');
+  if (link === 'serial') {
+    chunkSize = SERIAL_CHUNK;
+    log('串口链路：单包 ' + chunkSize + ' 字节，设备空闲堆 = ' + f[2] +
+        ' 字节，已开机 ' + (parseInt(f[3], 10) / 1000).toFixed(1) + 's', 'ok');
+    return;
+  }
   mtu = parseInt(f[1], 10) || 23;
-  log('协商 MTU = ' + mtu + '，单包有效载荷 = ' + Math.min(MAX_CHUNK, mtu - 3) + ' 字节', 'ok');
+  chunkSize = Math.min(MAX_CHUNK, mtu - 3);
+  log('协商 MTU = ' + mtu + '，单包有效载荷 = ' + chunkSize + ' 字节', 'ok');
   log('设备空闲堆 = ' + f[2] + ' 字节，已开机 ' + (parseInt(f[3], 10) / 1000).toFixed(1) + 's');
 }
 
 // ── 图库列表 ────────────────────────────────────────────────
 // 设备按 chunk:<本片起始偏移>/<总长>:<数据> 分片推送。偏移是自描述的，
 // 所以乱序/重发都能正确落位；拼到 got == total 即完整。
-function fetchList() {
+// 串口下一行就是完整 JSON；BLE 才需要按分片拼装。
+async function fetchList() {
+  if (link === 'serial') {
+    const p = waitFor(t => t.startsWith('list:') || t.startsWith('err:'), 5000, 'list');
+    await writeCmd('list');
+    const txt = await p;
+    if (!txt.startsWith('list:')) throw new Error(txt.slice(4));
+    return JSON.parse(txt.slice(5));
+  }
   return new Promise((resolve, reject) => {
     let buf = null, total = 0, got = 0;
     const t = setTimeout(() => {
@@ -788,21 +1039,20 @@ function adler32(buf) {
   return (((b << 16) | a) >>> 0).toString(16).padStart(8, '0');
 }
 
-// 把 buf 按 8192 字节一批推送，每批等设备 ack 再发下一批。
-// writeValueWithoutResponse 不排队，猛灌会静默丢包（表现为图像整体错位）。
+// 把 buf 按批推送，每批等设备 ack 再发下一批。
+// writeValueWithoutResponse / 串口写入都不排队，猛灌会静默丢包（表现为图像整体错位）。
 // onProgress(sent)：每推完一批回调一次，用于状态行显示进度。
 async function sendBytes(buf, onProgress) {
   const total = buf.length;
-  const chunk = Math.min(MAX_CHUNK, mtu - 3);
+  const chunk = chunkSize;
+  const step = link === 'serial' ? SERIAL_ACK_STEP : ACK_STEP;
   const t0 = performance.now();
   let sent = 0, stalls = 0;
   while (sent < total) {
-    const batchEnd = Math.min(sent + ACK_STEP, total);
+    const batchEnd = Math.min(sent + step, total);
     while (sent < batchEnd) {
       const end = Math.min(sent + chunk, batchEnd);
-      const slice = buf.subarray(sent, end);
-      if (noResp) await chData.writeValueWithoutResponse(slice);
-      else await chData.writeValueWithResponse(slice);
+      await sendData(buf.subarray(sent, end));
       sent = end;
     }
     if (onProgress) onProgress(sent);
@@ -817,7 +1067,8 @@ async function sendBytes(buf, onProgress) {
   return { secs: (performance.now() - t0) / 1000, stalls };
 }
 
-// ── 图片处理管线（移植自 WiFi 版 webapp_html.h）──────────────
+// ── 图片处理管线（基座移植自 WiFi 版 webapp_html.h）──────────
+// 新增 moink 风格的暖色色域映射与自动色阶，其余仍走 Oklab 分类 + 边缘门控扩散
 function clamp8(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
 function hexToRgb(h) {
   return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
@@ -1006,6 +1257,9 @@ function quantizeTo2bpp(work) {
   const wc = work.getContext('2d');
   const image = wc.getImageData(0, 0, SW, SH);
   const px = image.data;
+  // 管线顺序与 moink 一致：曝光 → 色域映射 → 锐化 → 抖动
+  if ($('autolev').checked) autoLevels(px, SW, SH);
+  colorMapPixels(px, $('cmap').value);
   if (doVivid) enhance(px);
   if (doSharp) sharpenLuma(px, SW, SH);
 
@@ -1134,6 +1388,140 @@ function sharpenLuma(px, w, h) {
       px[p + 1] = clamp8(src[p + 1] + delta);
       px[p + 2] = clamp8(src[p + 2] + delta);
     }
+  }
+}
+
+// ── 暖色色域映射（参考 moink 的有限调色板成像）──────────────────
+// 黑/白/红/黄四种墨水能"平均"出来的只有 R 最大、B 最小的暖色带（色相 0°~60°）；
+// 蓝/青/绿无论怎么抖动都只会落到黑或白。所以先按暖色亲和度把颜色推进暖带，
+// 再用幂律提饱和（线性拉到满饱和会把整张图变成平涂红块），最后才做四色量化。
+const WARM_SAT_K = 0.75;
+
+function clamp01(v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+
+// 归一化 RGB(0..1) → HSL，h/s/l 均为 0..1
+function rgb2hsl01(r, g, b) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b);
+  const l = (mx + mn) * 0.5, d = mx - mn;
+  if (d < 1e-12) return [0, 0, l];
+  const den = l > 0.5 ? (2 - mx - mn) : (mx + mn);
+  const s = Math.min(1, d / Math.max(den, 1e-12));
+  const rc = (mx - r) / d, gc = (mx - g) / d, bc = (mx - b) / d;
+  let hh;
+  if (mx === r) hh = bc - gc;
+  else if (mx === g) hh = 2 + rc - bc;
+  else hh = 4 + gc - rc;
+  return [((hh / 6) % 1 + 1) % 1, s, l];
+}
+function hue2rgb01(p, q, t) {
+  t = ((t % 1) + 1) % 1;
+  if (t < 1 / 6) return p + (q - p) * 6 * t;
+  if (t < 0.5) return q;
+  if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+  return p;
+}
+function hsl2rgb01(h, s, l) {
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  return [hue2rgb01(p, q, h + 1 / 3), hue2rgb01(p, q, h), hue2rgb01(p, q, h - 1 / 3)];
+}
+
+// 暖色亲和度：红→黄带内 =1，向紫红/黄绿两侧平滑降到 0。
+// 用 smoothstep 而不是硬阈值，否则平滑渐变上会留一条等值线接缝。
+function warmAffinity(hd) {
+  if (hd > 300) {
+    const t = clamp01((hd - 300) / 50);
+    return t * t * (3 - 2 * t);
+  }
+  if (hd < 110) {
+    const t = clamp01((hd - 60) / 50);
+    return 1 - t * t * (3 - 2 * t);
+  }
+  return 0;
+}
+
+// 日落渐变 LUT（luma → RGB），全局暖化时叠一层，让压缩后的色相保留明暗层次
+const WARM_RAMP = (function () {
+  const stops = [[0, [0, 0, 0]], [0.10, [26, 6, 4]], [0.26, [92, 18, 12]],
+                 [0.42, [168, 40, 16]], [0.56, [214, 86, 18]], [0.70, [236, 140, 26]],
+                 [0.84, [248, 200, 60]], [0.93, [255, 235, 150]], [1, [255, 255, 255]]];
+  const lut = new Float32Array(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let k = 0;
+    while (k < stops.length - 2 && t >= stops[k + 1][0]) k++;
+    const x0 = stops[k][0], c0 = stops[k][1], x1 = stops[k + 1][0], c1 = stops[k + 1][1];
+    const f = (t - x0) / (x1 - x0);
+    for (let c = 0; c < 3; c++) lut[i * 3 + c] = c0[c] + (c1[c] - c0[c]) * f;
+  }
+  return lut;
+})();
+
+// natural  = 只提暖色：暖色区域提饱和并拉向暖带，冷色只降饱和、不硬拉（保留照片原貌）
+// adaptive = 把整圈色相压进 0°~60°，再叠日落渐变（红黄最多，但整体明显偏暖）
+// gray     = 亮度直出，适合文档/线稿
+// naive    = 不映射，作为对照
+function colorMapPixels(px, mode) {
+  if (mode === 'naive') return;
+  for (let i = 0; i < px.length; i += 4) {
+    const r = px[i], g = px[i + 1], b = px[i + 2];
+    if (mode === 'gray') {
+      const L = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      px[i] = px[i + 1] = px[i + 2] = L;
+      continue;
+    }
+    const hsl = rgb2hsl01(r / 255, g / 255, b / 255);
+    const hd = hsl[0] * 360;
+    let h2, s2;
+    if (mode === 'adaptive') {
+      h2 = (((30 + (hsl[0] - 0.5) * 58) % 360) + 360) % 360;
+      s2 = hsl[1];
+    } else {
+      // 选择性模型：亲和度高 → 幂律提饱和 + 色相拉向 30°；
+      // 亲和度低 → 只降饱和并轻微向暖带漂移，保留冷色的黑白观感。
+      const wa = warmAffinity(hd);
+      const boost = clamp01(0.60 * wa);
+      s2 = Math.pow(hsl[1], 1 - WARM_SAT_K * boost) * (1 - clamp01(0.25 * (1 - wa)));
+      let drift = -0.25 * (1 - wa) * (hd - 60);
+      drift = Math.max(-60, Math.min(0, drift));
+      const d2 = ((30 - hd + 540) % 360) - 180;
+      const pull = Math.max(-18, Math.min(18, 0.12 * d2));
+      h2 = (((hd + drift + wa * pull) % 360) + 360) % 360;
+    }
+    const fin = hsl2rgb01(h2 / 360, s2, hsl[2]);
+    if (mode === 'adaptive') {
+      const li = (Math.round(0.2126 * r + 0.7152 * g + 0.0722 * b) | 0) * 3;
+      const cast = 0.40;
+      px[i]     = fin[0] * 255 * (1 - cast) + WARM_RAMP[li] * cast;
+      px[i + 1] = fin[1] * 255 * (1 - cast) + WARM_RAMP[li + 1] * cast;
+      px[i + 2] = fin[2] * 255 * (1 - cast) + WARM_RAMP[li + 2] * cast;
+    } else {
+      px[i]     = fin[0] * 255;
+      px[i + 1] = fin[1] * 255;
+      px[i + 2] = fin[2] * 255;
+    }
+  }
+}
+
+// 自动色阶：按亮度直方图裁掉两端 0.5% 的极值，再把有效区间线性拉满 0..255
+function autoLevels(px, w, h) {
+  const n = w * h;
+  const hist = new Uint32Array(256);
+  for (let i = 0, p = 0; i < n; i++, p += 4) {
+    const L = Math.round(0.2126 * px[p] + 0.7152 * px[p + 1] + 0.0722 * px[p + 2]);
+    hist[L < 0 ? 0 : L > 255 ? 255 : L]++;
+  }
+  const clip = Math.max(1, Math.round(n * 0.005));
+  let c = 0, lo = 0, hi = 255;
+  for (let i = 0; i < 256; i++) { c += hist[i]; if (c >= clip) { lo = i; break; } }
+  c = 0;
+  for (let i = 0; i < 256; i++) { c += hist[i]; if (c >= n - clip) { hi = i; break; } }
+  if (hi - lo < 8) return;
+  const scale = 255 / (hi - lo);
+  for (let i = 0; i < px.length; i += 4) {
+    px[i]     = clamp8((px[i] - lo) * scale);
+    px[i + 1] = clamp8((px[i + 1] - lo) * scale);
+    px[i + 2] = clamp8((px[i + 2] - lo) * scale);
   }
 }
 
@@ -1308,6 +1696,8 @@ $('fit').addEventListener('change', process);
 $('dmode').addEventListener('change', process);
 $('sharpen').addEventListener('change', process);
 $('vivid').addEventListener('change', process);
+$('cmap').addEventListener('change', process);
+$('autolev').addEventListener('change', process);
 
 // 预览上拖动调位置（Pointer Events，兼容触摸）
 (function setupDrag() {
@@ -1502,6 +1892,14 @@ async function selfTest() {
   await writeCmd('reset');
   await rst;
 
+  // BLE 的数据特征值随时可收裸字节；串口要先让设备进入"只收数据"模式
+  if (link === 'serial') {
+    const raw = waitFor(t => t === 'raw:ok' || t.startsWith('err:'), 3000, 'raw');
+    await writeCmd('raw:' + IMG_BYTES);
+    const r = await raw;
+    if (r.startsWith('err:')) throw new Error('自检被拒：' + r.slice(4));
+  }
+
   const { secs, stalls } = await sendBytes(buf);
 
   const sp = waitFor(t => t.startsWith('stats:'), 3000, 'stats');
@@ -1520,7 +1918,7 @@ async function selfTest() {
 async function guarded(fn) {
   if (busy) return;
   busy = true;
-  setConnected(!!(server && server.connected));
+  setConnected(connected);
   try {
     await fn();
   } catch (e) {
@@ -1528,12 +1926,22 @@ async function guarded(fn) {
     toast('✗ ' + e.message, 5000, 'bad');
   } finally {
     busy = false;
-    setConnected(!!(server && server.connected));
+    setConnected(connected);
   }
 }
 
 $('btnConnect').addEventListener('click', () => guarded(connect));
-$('btnDisconnect').addEventListener('click', disconnect);
+$('btnSerial').addEventListener('click', () => guarded(connectSerial));
+$('btnDisconnect').addEventListener('click', () => {
+  if (link === 'serial') {
+    guarded(async () => {
+      teardown('已主动断开');
+      link = null;
+      await closeSerial(false);
+      setConnected(false);
+    });
+  } else disconnect();
+});
 $('btnInfo').addEventListener('click', () => guarded(queryInfo));
 $('btnList').addEventListener('click', () => guarded(refreshList));
 $('btnClear').addEventListener('click', () => guarded(clearScreen));
@@ -1545,10 +1953,10 @@ $('btnTestImg').addEventListener('click', () =>
   guarded(() => uploadImage(safeName($('iname').value, 'test'), makeTestImage(), $('btnTestImg'))));
 $('btnSelfTest').addEventListener('click', () => guarded(selfTest));
 
-const PAGE_VER = '2026-10-07g'; // 每次改本页都改这里：用来确认浏览器加载的不是缓存旧版
-log('页面就绪 v' + PAGE_VER + '。连接设备 → 上传页选图转四色并显示，图库页管理已传图片，调试页看日志。');
+const PAGE_VER = '2026-10-30a'; // 每次改本页都改这里：用来确认浏览器加载的不是缓存旧版
+log('页面就绪 v' + PAGE_VER + '。蓝牙连接（手机/电脑）或串口连接（电脑 Chrome/Edge）→ 上传页选图转四色并显示，图库页管理已传图片，调试页看日志。');
 log('本地试跑：在本目录执行 python -m http.server 8000，然后开 http://localhost:8000/ble_test.html');
-log('（http://localhost 也算安全上下文，可以直接用 Web Bluetooth）', 'dim');
+log('（http://localhost 也算安全上下文，Web Bluetooth / Web Serial 都能直接用）', 'dim');
 unread = 0; updateBadge(); // 启动提示不算未读，徽标只统计连接后的重要事件
 </script>
 </body>
