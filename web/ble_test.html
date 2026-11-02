@@ -1899,7 +1899,7 @@ try { Object.assign(calCfg, JSON.parse(localStorage.getItem(CAL_KEY) || '{}')); 
 
 const CAL_INK = QUANT_PAL[0], CAL_WHITE = QUANT_PAL[1];
 const CAL_YELLOW = QUANT_PAL[2], CAL_RED = QUANT_PAL[3];
-let calLabels = null, calPacked = null, calFrame = null, calTimer = 0, calReady = false;
+let calLabels = null, calPacked = null, calTimer = 0, calReady = false;
 
 function calPad2(n) { return n < 10 ? '0' + n : '' + n; }
 function calYmd(d) { return d.getFullYear() + '-' + calPad2(d.getMonth() + 1) + '-' + calPad2(d.getDate()); }
@@ -2036,6 +2036,9 @@ function calDrawGrid(ctx, d, g) {
   const startCol = (first.getDay() - ws + 7) % 7;
   const ndays = new Date(y, m + 1, 0).getDate();
   const today = calTodayDate();
+  const rows = Math.ceil((startCol + ndays) / 7);
+  const rowH = Math.min(g.maxRowH, (g.bottom - g.rowY) / rows);
+  const offsetY = (g.bottom - g.rowY - rows * rowH) / 2;
 
   for (let i = 0; i < 7; i++) {
     const wd = (ws + i) % 7;
@@ -2046,7 +2049,7 @@ function calDrawGrid(ctx, d, g) {
   for (let n = 1; n <= ndays; n++) {
     const cell = startCol + n - 1;
     const cx = g.x0 + g.colW * (cell % 7 + 0.5);
-    const cy = g.rowY + Math.floor(cell / 7) * g.rowH;
+    const cy = g.rowY + offsetY + Math.floor(cell / 7) * rowH + (rowH + g.font * 0.7) / 2;
     const date = new Date(y, m, n, 12);
     const wd = date.getDay();
     const isToday = date.getFullYear() === today.getFullYear() &&
@@ -2111,7 +2114,8 @@ function calDrawPortrait(ctx, d) {
 
   if (calCfg.grid) {
     calDrawGrid(ctx, d, {
-      x0: 30, colW: (SW - 60) / 7, headY: 330, rowY: 376, rowH: 62,
+      x0: 30, colW: (SW - 60) / 7, headY: 330, rowY: 376,
+      bottom: calCfg.note.trim() ? 720 : 736, maxRowH: 72,
       headFont: calSize(20), font: calSize(26),
       blockW: calSize(58), blockH: calSize(52), dotR: 3
     });
@@ -2160,7 +2164,8 @@ function calDrawLandscape(ctx, d) {
 
   if (calCfg.grid) {
     calDrawGrid(ctx, d, {
-      x0: 30, colW: (SH - 60) / 7, headY: 268, rowY: 306, rowH: 42,
+      x0: 30, colW: (SH - 60) / 7, headY: 268, rowY: 306,
+      bottom: calCfg.note.trim() ? 522 : 538, maxRowH: 56,
       headFont: calSize(18), font: calSize(22),
       blockW: calSize(64), blockH: calSize(34), dotR: 2.5
     });
@@ -2307,15 +2312,14 @@ function calRender() {
     calCfg = calCollect();
     calSave();
     const d = calEffectiveDate();
-    calFrame = calComposeFrame(d);
-    calLabels = calQuantize(calFrame);
+    const frame = calComposeFrame(d);
+    calLabels = calQuantize(frame);
     calPacked = calPackLabels(calLabels);
     calPaintPreview();
     calUpdateHint(d);
     $('calName').placeholder = calAutoName(d);
   } catch (e) {
     calPacked = null;
-    calFrame = null;
     calLabels = null;
     err.textContent = '日历生成失败：' + e.message;
     console.error(e);
@@ -2577,7 +2581,7 @@ $('btnTestImg').addEventListener('click', () =>
 $('btnSelfTest').addEventListener('click', () => guarded(selfTest));
 calInit();
 
-const PAGE_VER = '2026-10-30b'; // 每次改本页都改这里：用来确认浏览器加载的不是缓存旧版
+const PAGE_VER = '2026-11-02a'; // 每次改本页都改这里：用来确认浏览器加载的不是缓存旧版
 log('页面就绪 v' + PAGE_VER + '。蓝牙连接（手机/电脑）或串口连接（电脑 Chrome/Edge）→ 上传页选图转四色并显示，日历页生成并下发日历，图库页管理已传图片，调试页看日志。');
 log('本地试跑：在本目录执行 python -m http.server 8000，然后开 http://localhost:8000/ble_test.html');
 log('（http://localhost 也算安全上下文，Web Bluetooth / Web Serial 都能直接用）', 'dim');
