@@ -187,9 +187,19 @@ String galleryListJson() {
     return json;
 }
 
+bool galleryUploadBusy() {
+    return (bool)uploadFile;
+}
+
 bool galleryUploadStart(int &id, const String &name, String *errOut) {
     if (!fsReady) {
         if (errOut) *errOut = "文件系统未就绪";
+        return false;
+    }
+    // 已有上传时不能重新 open：会覆盖静态的 uploadFile/uploadPath，泄漏句柄，
+    // 并且两条通道的数据会写进同一个文件
+    if (galleryUploadBusy()) {
+        if (errOut) *errOut = "已有上传正在进行中";
         return false;
     }
     if (galleryCount() >= MAX_IMAGES) {

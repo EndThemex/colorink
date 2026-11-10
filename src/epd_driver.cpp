@@ -261,6 +261,7 @@ bool epdDisplay2bpp(const uint8_t *image2bpp)
     epdRendering = true;
 
     bool ok = false;
+    unsigned long tAll = millis(); // 整个刷屏（含重试）的耗时
     unsigned long t0 = millis();
     for (int attempt = 0; attempt < 3 && !ok; attempt++)
     {
@@ -291,7 +292,7 @@ bool epdDisplay2bpp(const uint8_t *image2bpp)
     // colorBuf 保持常驻（开机时预分配，见 main.cpp setup）：运行期重新
     // malloc 105KB 连续内存在上传过图片后容易因堆碎片失败，导致刷新静默失败
     epdSleep(); // 关面板电源轨 + 控制器进 0x07 深睡，降低待机电流
-    Serial.printf("[EPD] all done %lums\n", millis());
+    Serial.printf("[EPD] all done %lums\n", millis() - tAll);
     epdRendering = false;
     if (!ok)
         Serial.println("[EPD] display failed after 3 attempts");

@@ -58,13 +58,13 @@ static void queueReply(const char *fmt, ...)
 }
 
 // ── 图库列表的分片发送 ──────────────────────────────────────
-// galleryListJson() 有 1KB 级别（20 张 × 约 60 字节），装不进一条通知，
-// 只能按 MTU 切开发。命令行里只置一个请求标志，真正的目录扫描和分片发送
-// 都留给主循环（blePumpReplies）做——LittleFS 目录扫描是阻塞操作，不该放在
-// NimBLE 主机任务里。
+// galleryListJson() 有 2KB 级别（20 张 × 约 110 字节，名字上限 48 字节），
+// 装不进一条通知，只能按 MTU 切开发。命令行里只置一个请求标志，真正的目录
+// 扫描和分片发送都留给主循环（blePumpReplies）做——LittleFS 目录扫描是阻塞
+// 操作，不该放在 NimBLE 主机任务里。
 static volatile bool listRequested = false;
 static bool listPumping = false;        // 分片发送进行中（主循环私有）
-static char listBuf[1600];              // 列表 JSON 快照
+static char listBuf[3072];              // 列表 JSON 快照
 static size_t listLen = 0;
 static size_t listSent = 0;
 static uint8_t chunkOut[544];           // 一条通知的组包缓冲
@@ -261,7 +261,12 @@ class CmdCB : public NimBLECharacteristicCallbacks
         else if (s.rfind("display:", 0) == 0)
         {
             long id = parseLong(s.c_str() + 8);
-            if (id < 0 || !galleryExists((int)id))
+            if (uploading || galleryUploadBusy())
+            {
+                // 刷屏要读 flash，而上传还在写 flash（可能来自串口通道）
+                queueReply("err:上传中，暂不能刷屏");
+            }
+            else if (id < 0 || !galleryExists((int)id))
             {
                 queueReply("err:图片不存在");
             }
@@ -485,11 +490,20 @@ void blePumpReplies()
         String json = galleryListJson();
         size_t n = json.length();
         if (n > sizeof(listBuf))
-            n = sizeof(listBuf);
-        memcpy(listBuf, json.c_str(), n);
-        listLen = n;
-        listSent = 0;
-        listPumping = true;
+        {
+            // 宁可报错也不发半截 JSON：页面按声明的总长拼满就直接 parse，
+            // 残包只会得到一个看不懂的语法错误
+            Serial.printf("[BLE] list too large: %u > %u bytes\n",
+                          (unsigned)n, (unsigned)sizeof(listBuf));
+            queueReply("err:列表过长");
+        }
+        else
+        {
+            memcpy(listBuf, json.c_str(), n);
+            listLen = n;
+            listSent = 0;
+            listPumping = true;
+        }
     }
 
     if (listPumping)
@@ -572,7 +586,8 @@ void bleModeLoop()
 
     // 排队的刷屏/清屏。这里会阻塞 ~15 秒，期间 epdWaitBusy 通过 netServicePump
     // 反复调用 blePumpReplies，页面不会因为等不到回包而超时。
-    if (!epdIsRendering())
+    // 上传进行中不执行：刷屏读 flash 与 GATT 回调写 flash 会并发访问 LittleFS。
+    if (!epdIsRendering() && !uploading && !galleryUploadBusy())
     {
         int id = -1;
         bool fromButton = false;

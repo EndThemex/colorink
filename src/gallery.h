@@ -31,6 +31,10 @@ int  galleryUploadEnd(const String &name, String *errOut);
 // Client went away mid-upload: close the handle and delete the partial file.
 // Safe to call when no upload is in progress.
 void galleryUploadAbort();
+// True while a file handle is open for upload (any channel: BLE / serial / HTTP).
+// Panel refresh must not run concurrently with it: the two would touch LittleFS
+// from different tasks.
+bool galleryUploadBusy();
 
 // Load image by id into colorBuf and refresh the panel (2bpp).
 // Returns false if the image does not exist.

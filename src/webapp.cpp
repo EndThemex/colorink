@@ -242,6 +242,8 @@ static void handleClear() {
 
 void webappProcessPending() {
     if (epdIsRendering()) return;  // a refresh (e.g. boot repaint) is still running
+    // 串口通道可能正在上传：刷屏读 flash 不能和写 flash 重叠
+    if (galleryUploadBusy()) return;
     if (pendingClear) {
         pendingClear = false;
         galleryClearScreen();

@@ -253,20 +253,23 @@ static void handleWiFiWatchdog()
 static void handleButton()
 {
     static bool pressed = false;
+    // 长按只触发一次：一直按着不能每 2 秒重复执行（蓝牙固件会反复断开连接）
+    static bool holdFired = false;
     static unsigned long pressStart = 0;
 
     bool down = digitalRead(PIN_CFG_BTN) == LOW;
     if (down && !pressed)
     {
         pressed = true;
+        holdFired = false;
         pressStart = millis();
         return;
     }
     if (down && pressed)
     {
-        if (millis() - pressStart >= (unsigned long)CFG_BTN_HOLD_MS)
+        if (!holdFired && millis() - pressStart >= (unsigned long)CFG_BTN_HOLD_MS)
         {
-            pressed = false;
+            holdFired = true;
 #ifdef INKSIGHT_BLE
             // 这颗板子只有一个按键（GPIO9，即 BOOT 键），长按留给"强制释放 BLE
             // 连接"这个兜底：手机端卡死时设备端否则没辙。LED 由 bleModeLoop 驱动，

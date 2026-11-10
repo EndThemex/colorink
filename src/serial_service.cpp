@@ -292,7 +292,9 @@ void handleLine(String s)
 // 网页端按 display:done 等待即可。
 void runPending()
 {
-    if (uploading || dataMode) return;
+    // galleryUploadBusy() 还要覆盖"上传走的是蓝牙通道"的情况：刷屏读 flash
+    // 不能和写 flash 重叠
+    if (uploading || dataMode || galleryUploadBusy()) return;
     // 一次只跑一个面板操作：屏幕还在刷新（例如按键触发的切图）时继续排队，
     // 等下一轮 loop 再执行，避免刷新中被 epdDisplay2bpp 拒掉后误回 display:fail。
     if (epdIsRendering()) return;
