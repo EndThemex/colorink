@@ -17,7 +17,7 @@ bool connectWiFiSTA(unsigned long perNetTimeoutMs = WIFI_STA_ATTEMPT_MS,
 // answering while the panel refreshes (~15s).
 void netServicePump();
 
-// Start the LAN web service (mDNS inksight.local + HTTP server on port 80).
+// Start the LAN web service (mDNS colorink.local + HTTP server on port 80).
 // Requires an active STA connection.
 void webappStart();
 

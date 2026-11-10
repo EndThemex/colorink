@@ -121,7 +121,7 @@ static void handleStatus() {
     // realloc 十几次，长期频繁访问会在堆上留下碎片。
     json.reserve(360);
     json = "{\"ip\":\"" + WiFi.localIP().toString() + "\"";
-    json += ",\"mdns\":\"inksight.local\"";
+    json += ",\"mdns\":\"colorink.local\"";
     json += ",\"ssid\":\"" + jsonEscape(WiFi.SSID()) + "\"";
     json += ",\"rssi\":" + String(WiFi.RSSI());
     json += ",\"heap\":" + String((unsigned)ESP.getFreeHeap());
@@ -262,11 +262,11 @@ void webappProcessPending() {
 void webappStart() {
     if (serverRunning) return;
 
-    if (!MDNS.begin("inksight")) {
+    if (!MDNS.begin("colorink")) {
         Serial.println("[WEB] mDNS start failed (IP access still works)");
     } else {
         MDNS.addService("http", "tcp", 80);
-        Serial.println("[WEB] mDNS: http://inksight.local");
+        Serial.println("[WEB] mDNS: http://colorink.local");
     }
 
     webServer.on("/", HTTP_GET, handleRoot);

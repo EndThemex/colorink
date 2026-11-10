@@ -44,7 +44,7 @@ static void persistWiFiList(Preferences &p) {
 // ── Load config from NVS ────────────────────────────────────
 
 void loadConfig() {
-    prefs.begin("inksight", true);  // read-only
+    prefs.begin("colorink", true);  // read-only
 
     int version = prefs.getInt("cfg_version", 0);
     if (version != CONFIG_VERSION) {
@@ -58,7 +58,7 @@ void loadConfig() {
             g_wifiSsids[0] = ssid;
             g_wifiPass[0]  = pass;
             g_wifiCount = 1;
-            prefs.begin("inksight", false);
+            prefs.begin("colorink", false);
             prefs.putInt("cfg_version", CONFIG_VERSION);
             persistWiFiList(prefs);
             prefs.end();
@@ -141,7 +141,7 @@ bool addWiFiConfig(const String &ssid, const String &pass) {
         g_wifiCount++;
     }
 
-    prefs.begin("inksight", false);
+    prefs.begin("colorink", false);
     prefs.putInt("cfg_version", CONFIG_VERSION);
     persistWiFiList(prefs);
     prefs.end();
@@ -162,7 +162,7 @@ bool deleteWiFiBySSID(const String &ssid) {
     g_wifiSsids[g_wifiCount] = "";
     g_wifiPass[g_wifiCount]  = "";
 
-    prefs.begin("inksight", false);
+    prefs.begin("colorink", false);
     prefs.putInt("cfg_version", CONFIG_VERSION);
     persistWiFiList(prefs);
     prefs.end();

@@ -74,7 +74,7 @@ button.sm{padding:5px 11px;font-size:.8rem;border-radius:7px}
     <h2>连接成功</h2>
     <p>设备将在 5 秒后自动重启并接入 WiFi。</p>
     <p>重启完成后，请用<b>同一 WiFi</b> 下的浏览器访问：</p>
-    <p style="font-size:1.05rem"><b id="okurl">http://inksight.local</b></p>
+    <p style="font-size:1.05rem"><b id="okurl">http://colorink.local</b></p>
     <p style="margin-top:8px;font-size:.78rem" id="okip"></p>
   </div>
 </div>
