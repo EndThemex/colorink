@@ -6,34 +6,22 @@
 // Initialize GPIO pins and SPI for EPD
 void gpioInit();
 
-// Initialize EPD controller (full refresh mode)
+// Initialize EPD controller (hardware reset + register setup + power on).
+// Each refresh runs this first, so a deep-sleeped controller is woken here.
 void epdInit();
 
-// Initialize EPD controller in fast refresh mode
-void epdInitFast();
-
-// Full-screen display with full refresh (clears ghosting, has black-white flash)
-void epdDisplay(const uint8_t *image);
-
-// Deep clear: multi-cycle black/white flush then display image (eliminates stubborn ghosting)
-void epdDisplayDeepClear(const uint8_t *image);
-
-// Full-screen display with pre-packed 2bpp data (4-color panels)
-void epdDisplay2bpp(const uint8_t *image2bpp);
+// Display a pre-packed 2bpp (BWRY) framebuffer (4 px/byte: 00=black 01=white
+// 10=yellow 11=red). Blocks ~15s. Retries up to 3 times on busy timeout.
+// Returns false if the panel failed to complete the refresh (or another
+// refresh is already in progress).
+bool epdDisplay2bpp(const uint8_t *image2bpp);
 
 // True while a panel refresh is in flight (~15s). Callers must not start a
 // second refresh concurrently — the panel state would be corrupted.
 bool epdIsRendering();
 
-// Full-screen display with fast refresh (reduced flashing)
-void epdDisplayFast(const uint8_t *image);
-
-// Partial display refresh for a rectangular region
-bool epdSupportsPartialRefresh();
-void epdPartialDisplay(uint8_t *data, int xStart, int yStart, int xEnd, int yEnd);
-void epdPartialDisplayWithOld(uint8_t *data, const uint8_t *oldData, int xStart, int yStart, int xEnd, int yEnd);
-
-// Put EPD into deep sleep mode
+// Put the EPD controller into deep sleep (idempotent). A hardware reset
+// (epdInit -> epdReset) is required before the next refresh.
 void epdSleep();
 
 #endif // INKSIGHT_EPD_DRIVER_H

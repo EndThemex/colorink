@@ -301,9 +301,10 @@ bool galleryDisplayById(int id) {
     }
     Serial.printf("[GAL] displaying id=%d (%s)\n", id, path.c_str());
     // epdDisplay2bpp blocks ~15s; colorBuf stays allocated (pre-allocated at boot)
-    epdDisplay2bpp(colorBuf);
-    writeCurrentId(id);
-    return true;
+    bool ok = epdDisplay2bpp(colorBuf);
+    if (ok)
+        writeCurrentId(id);
+    return ok;
 }
 
 int galleryNextId(int baseId, int dir) {
@@ -353,9 +354,10 @@ bool galleryDeleteById(int id) {
 bool galleryClearScreen() {
     if (!ensureColorBuf()) return false;
     memset(colorBuf, 0x55, COLOR_BUF_LEN);  // 0b01 = white for all pixels
-    epdDisplay2bpp(colorBuf);
-    writeCurrentId(-1);
-    return true;
+    bool ok = epdDisplay2bpp(colorBuf);
+    if (ok)
+        writeCurrentId(-1);
+    return ok;
 }
 
 int galleryCurrentId() {

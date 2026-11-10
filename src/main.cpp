@@ -31,11 +31,8 @@
 #include "webapp.h"
 #endif
 
-// ── Shared framebuffers (referenced by other modules via extern) ──
-uint8_t imgBuf[IMG_BUF_LEN];
-#if EPD_BPP >= 2
+// ── Shared framebuffer (referenced by other modules via extern) ──
 uint8_t *colorBuf = nullptr;
-bool useColorBuf = false;
 
 bool ensureColorBuf()
 {
@@ -52,7 +49,6 @@ bool ensureColorBuf()
     Serial.printf("[MEM] colorBuf allocated %d bytes on heap\n", COLOR_BUF_LEN);
     return true;
 }
-#endif
 
 void netServicePump()
 {
@@ -67,6 +63,10 @@ void netServicePump()
     else if (webappRunning())
         webappHandle();
 #endif
+    // USB 串口通道：两套固件的刷新等待里都要泵。按钮/网页触发的刷屏会阻塞
+    // ~15s，不泵的话串口上传的 ack 全部延迟，网页串口通道表现为假死。
+    // runPending 里有 epdIsRendering 保护，刷新中排队的显示请求会继续排队。
+    serialServiceLoop();
 }
 
 // ── Battery voltage ─────────────────────────────────────────
@@ -354,6 +354,10 @@ static void handleAutoSleep()
 #if PIN_LED >= 0
     digitalWrite(PIN_LED, LOW);
 #endif
+
+    // 面板控制器进深睡（幂等：上次刷新后已睡则跳过）。深睡期间控制器待机
+    // 电流更低，对电池供电的相框是纯收益；唤醒由 epdInit 的硬件复位完成。
+    epdSleep();
 
     // C3 只有 RTC 域的 GPIO0-5 能在深睡中唤醒，按键脚 GPIO2 恰好在内。
     // 深睡期间数字 pad 的配置会丢，进睡前重新配一次输入上拉，

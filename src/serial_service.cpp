@@ -4,6 +4,7 @@
 
 #include "config.h"
 #include "gallery.h"
+#include "epd_driver.h"
 
 namespace {
 
@@ -292,6 +293,9 @@ void handleLine(String s)
 void runPending()
 {
     if (uploading || dataMode) return;
+    // 一次只跑一个面板操作：屏幕还在刷新（例如按键触发的切图）时继续排队，
+    // 等下一轮 loop 再执行，避免刷新中被 epdDisplay2bpp 拒掉后误回 display:fail。
+    if (epdIsRendering()) return;
 
     if (pendingDisplayId >= 0)
     {

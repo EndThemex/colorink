@@ -81,7 +81,8 @@ bool epdIsRendering()
     return epdRendering;
 }
 
-static void epdWaitBusy(unsigned long maxMs = 0)
+// 等待控制器空闲。返回 false 表示超时（控制器卡死/波形异常），调用方据此重试。
+static bool epdWaitBusy(unsigned long maxMs = 0)
 {
     unsigned long t0 = millis();
     unsigned long timeoutMs = maxMs > 0 ? maxMs : 60000;
@@ -92,12 +93,16 @@ static void epdWaitBusy(unsigned long maxMs = 0)
         if (millis() - t0 > timeoutMs)
         {
             Serial.println("EPD busy TIMEOUT!");
-            return;
+            return false;
         }
     }
+    return true;
 }
 
 static bool jdPowerIsOn = false;
+// 控制器是否已进 0x07 深睡：深睡后 SPI 无响应，重复发送没有意义；
+// epdReset（硬件复位）是唯一的唤醒路径，复位后清标志。
+static bool jdInDeepSleep = false;
 
 static void jdPowerOn()
 {
@@ -142,6 +147,8 @@ static void epdReset()
     epdWaitBusy(10000);
     Serial.printf("[EPD] after reset BUSY=%d\n", digitalRead(PIN_EPD_BUSY));
     delay(30);
+    // 硬件复位唤醒深睡中的控制器
+    jdInDeepSleep = false;
 }
 
 // ── GPIO initialization ─────────────────────────────────────
@@ -192,10 +199,6 @@ void epdInit()
     jdPowerOn();
 }
 
-// ── EPD fast init (no separate fast waveform for this panel) ──
-
-void epdInitFast() { epdInit(); }
-
 // ── 2bpp write: one 0x83 window per row, then data stream ──
 
 static void jdWrite2bpp(const uint8_t *buf)
@@ -244,55 +247,26 @@ static void jdWrite2bppPhys(const uint8_t *buf)
 }
 #endif
 
-static uint8_t jdPackMonoPixelGroup(const uint8_t *image, int rowBytes, int y, int x)
-{
-    uint8_t packed = 0;
-    for (int bit = 0; bit < 4; bit++)
-    {
-        int px = x + bit;
-        bool isBlack = (image[y * rowBytes + px / 8] & (0x80 >> (px % 8))) == 0;
-        packed |= (isBlack ? 0x00 : 0x01) << (6 - bit * 2);
-    }
-    return packed;
-}
-
-// ── BW full refresh (converted to 2bpp) ──
-
-void epdDisplay(const uint8_t *image)
-{
-    if (!ensureColorBuf())
-    {
-        Serial.println("[EPD] colorBuf alloc failed");
-        return;
-    }
-    int rowBytes = W / 8;
-    int out = 0;
-    for (int y = 0; y < H; y++)
-    {
-        for (int x = 0; x < W; x += 4)
-        {
-            colorBuf[out++] = jdPackMonoPixelGroup(image, rowBytes, y, x);
-        }
-    }
-    epdDisplay2bpp(colorBuf);
-}
-
 // ── 2bpp color refresh ──
+// 全工程唯一入口：gallery 只存/只发 2bpp BWRY 帧缓冲，单色转换路径已随
+// imgBuf 一并移除（那 105KB 静态缓冲从未被写过）。
 
-void epdDisplay2bpp(const uint8_t *image2bpp)
+bool epdDisplay2bpp(const uint8_t *image2bpp)
 {
     if (epdRendering)
     {
         Serial.println("[EPD] refresh already in progress, request ignored");
-        return;
+        return false;
     }
     epdRendering = true;
 
-    for (int attempt = 0; attempt < 3; attempt++)
+    bool ok = false;
+    unsigned long t0 = millis();
+    for (int attempt = 0; attempt < 3 && !ok; attempt++)
     {
-        unsigned long t0 = millis();
+        t0 = millis();
         Serial.printf("[EPD] attempt %d start BUSY=%d\n", attempt, digitalRead(PIN_EPD_BUSY));
-        epdInit(); // 复位 + 寄存器序列 + 上电
+        epdInit(); // 复位 + 寄存器序列 + 上电（也会把深睡中的控制器唤醒）
         Serial.printf("[EPD] init done %lums BUSY=%d\n", millis() - t0, digitalRead(PIN_EPD_BUSY));
 
 #ifdef EPD_JD79665_PHYS800
@@ -309,70 +283,32 @@ void epdDisplay2bpp(const uint8_t *image2bpp)
 #endif
         epdSendCommand(0x12);
         epdSendData(0x00);
-        epdWaitBusy(60000);
-        Serial.printf("[EPD] refresh done %lums\n", millis() - t0);
-
-        jdPowerOff();
-        Serial.printf("[EPD] all done %lums\n", millis() - t0);
-        // colorBuf 保持常驻（开机时预分配，见 main.cpp setup）：运行期重新
-        // malloc 105KB 连续内存在上传过图片后容易因堆碎片失败，导致刷新静默失败
-        epdRendering = false;
-        return;
+        // 刷新等待可能超时（控制器卡死）：计入失败，硬件复位后重试
+        ok = epdWaitBusy(60000);
+        Serial.printf("[EPD] refresh %s %lums\n", ok ? "done" : "TIMEOUT", millis() - t0);
     }
+
+    // colorBuf 保持常驻（开机时预分配，见 main.cpp setup）：运行期重新
+    // malloc 105KB 连续内存在上传过图片后容易因堆碎片失败，导致刷新静默失败
+    epdSleep(); // 关面板电源轨 + 控制器进 0x07 深睡，降低待机电流
+    Serial.printf("[EPD] all done %lums\n", millis());
     epdRendering = false;
-    Serial.println("[EPD] display failed after 3 attempts");
-}
-
-// ── Deep clear: no register-level deep clear, fall back to plain display ──
-
-void epdDisplayDeepClear(const uint8_t *image)
-{
-    epdDisplay(image);
-}
-
-// ── Fast refresh: same as full for this panel ──
-
-void epdDisplayFast(const uint8_t *image)
-{
-    epdDisplay(image);
-}
-
-// ── Partial refresh: not supported ──
-
-bool epdSupportsPartialRefresh()
-{
-    return false;
-}
-
-void epdPartialDisplay(uint8_t *data, int xStart, int yStart, int xEnd, int yEnd)
-{
-    (void)data;
-    (void)xStart;
-    (void)yStart;
-    (void)xEnd;
-    (void)yEnd;
-    epdDisplay(imgBuf);
-}
-
-void epdPartialDisplayWithOld(uint8_t *data, const uint8_t *oldData, int xStart, int yStart, int xEnd, int yEnd)
-{
-    (void)data;
-    (void)oldData;
-    (void)xStart;
-    (void)yStart;
-    (void)xEnd;
-    (void)yEnd;
-    epdDisplay(imgBuf);
+    if (!ok)
+        Serial.println("[EPD] display failed after 3 attempts");
+    return ok;
 }
 
 // ── EPD sleep ───────────────────────────────────────────────
 
 void epdSleep()
 {
+    if (jdInDeepSleep)
+        return; // 已在深睡，SPI 无响应，重复发送没有意义
     if (jdPowerIsOn)
         jdPowerOff();
     epdSendCommand(0x07);
     epdSendData(0xA5);
+    jdInDeepSleep = true;
     delay(100);
 }
 
