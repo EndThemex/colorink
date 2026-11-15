@@ -66,6 +66,7 @@
       <nav class="tabs">
         <button class="tab active" data-page="pageUpload">上传</button>
         <button class="tab" data-page="pageCalendar">日历</button>
+        <button class="tab" data-page="pageText">文字</button>
         <button class="tab" data-page="pageGallery">图库</button>
         <button class="tab" data-page="pageDebug">
           调试<span id="dbgBadge" class="badge" hidden></span>
@@ -329,6 +330,79 @@
                 RTC，不会自动翻页。
                 农历与节日由浏览器内置中国历法换算，横版会顺时针旋转 90° 写入
                 552×768 帧，需横持设备查看。
+              </div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section id="pageText" class="tabpage">
+        <section class="panel">
+          <div class="panel-head"><span class="dot"></span>自定义文字</div>
+          <div class="convert" id="txtConvert">
+            <div class="controls">
+              <div class="subhead">元素列表（文字 / SVG）</div>
+              <div id="txtList" class="txtlist"></div>
+              <div class="row" style="margin-top: 12px">
+                <button id="txtAdd" class="primary">＋ 添加文字</button>
+                <button id="txtAddSvg">＋ 添加 SVG</button>
+                <input
+                  type="file"
+                  id="txtSvgFile"
+                  accept=".svg,image/svg+xml"
+                  style="display: none"
+                />
+              </div>
+              <div class="row" style="margin-top: 8px">
+                <button id="txtCenter" disabled>居中</button>
+                <button id="txtRemove" disabled>删除选中</button>
+              </div>
+              <div class="fieldgrid" style="margin-top: 18px">
+                <label class="field"
+                  >背景
+                  <select id="txtBg">
+                    <option value="white">白色</option>
+                    <option value="black">黑色</option>
+                  </select>
+                </label>
+                <label class="field"
+                  >中心吸附
+                  <select id="txtSnap">
+                    <option value="on">开启 · 对齐中线</option>
+                    <option value="off">关闭</option>
+                  </select>
+                </label>
+              </div>
+              <div class="row" style="margin-top: 16px">
+                <input
+                  type="text"
+                  id="txtName"
+                  placeholder="图片名称（可选）"
+                  maxlength="24"
+                />
+                <button id="txtPng">下载 PNG</button>
+                <button id="txtUpload" class="primary" disabled>
+                  发送到屏幕
+                </button>
+              </div>
+              <div class="err" id="txtErr"></div>
+              <div class="note">
+                点选预览里的文字或 SVG 即可拖动；拖到画布中线附近会自动吸附对齐，并显示蓝色参考线。
+                文字颜色对应墨水屏的黑 / 白 / 黄 / 红四色，白字需要配合黑色背景；
+                SVG 按原色量化到四色，尺寸用卡片里的「宽度」调整。
+              </div>
+            </div>
+            <div class="previewcol">
+              <div class="txtstage" id="txtStage">
+                <canvas id="txtPreview" width="552" height="768"></canvas>
+                <canvas id="txtOverlay" width="552" height="768"></canvas>
+              </div>
+              <div class="legend">
+                <span><i id="txtSw0"></i>黑</span>
+                <span><i id="txtSw1"></i>白</span>
+                <span><i id="txtSw2"></i>黄</span>
+                <span><i id="txtSw3"></i>红</span>
+                <span class="meta" id="txtMeta">552 × 768 · 四色 2bpp</span>
               </div>
             </div>
           </div>

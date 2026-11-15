@@ -99,6 +99,7 @@
           calInit();
           calRender();
         }
+        if (name === "pageText") txtInit();
       }
       for (const t of document.querySelectorAll(".tab"))
         t.addEventListener("click", () => switchTab(t.dataset.page));
@@ -248,6 +249,7 @@
           .forEach((b) => (b.disabled = off));
         updateUpBtn();
         updateCalBtn();
+        updateTxtBtn();
       }
 
       // 断开后的统一收尾：作废全部句柄引用，并立刻让还在等回包的 Promise 失败。
@@ -1785,6 +1787,11 @@
           } catch (_) {}
           syncDisplayPal();
           if (calLabels) calPaintPreview();
+          if (txtLabels) {
+            txtSyncSwatches();
+            txtPaintPreview();
+            txtDrawOverlay();
+          }
           process();
         });
       }
@@ -1795,6 +1802,11 @@
         } catch (_) {}
         syncDisplayPal();
         if (calLabels) calPaintPreview();
+        if (txtLabels) {
+          txtSyncSwatches();
+          txtPaintPreview();
+          txtDrawOverlay();
+        }
         process();
       });
       $("calshot").addEventListener("click", () => {
@@ -2844,6 +2856,741 @@
         if (b) b.disabled = !(calPacked && connected && !busy);
       }
 
+      // ── 自定义文字（四色）───────────────────────────────────────
+      // 与日历共用静态度量：纯四色绘制 → 中性像素黑白归并 → 最近色量化 → 共用打包。
+      // 多段文字各自保存坐标，拖到画布中线附近自动吸附。
+      // v1 的数据没有 font 字段，读取时由 txtNormItem 补成默认黑体
+      const TXT_KEY = "colorink_text_cfg_v1";
+      // 字体栈同时覆盖 macOS/iOS 与 Windows，缺字体时按同名族回退
+      const TXT_FONTS = [
+        {
+          id: "sans",
+          label: "黑体",
+          css: '"PingFang SC","Microsoft YaHei","Noto Sans SC",sans-serif',
+        },
+        {
+          id: "serif",
+          label: "宋体",
+          css: '"Songti SC","SimSun","Noto Serif SC",serif',
+        },
+        {
+          id: "kai",
+          label: "楷体",
+          css: '"Kaiti SC","KaiTi","STKaiti","Noto Serif SC",serif',
+        },
+        {
+          id: "mono",
+          label: "等宽",
+          css: '"Cascadia Mono","Consolas","SF Mono",ui-monospace,monospace',
+        },
+      ];
+      const TXT_MAX_ITEMS = 12;
+      const TXT_MAX_SVGS = 6;
+      const TXT_SVG_MAX_BYTES = 128 * 1024; // SVG 源码要进 localStorage，别设太大
+
+      function txtFontId(id) {
+        return TXT_FONTS.some((f) => f.id === id) ? id : "sans";
+      }
+
+      // 元素统一存成一条数组：文字与 SVG 共用选中、拖动、居中吸附那套逻辑
+      function txtNormItem(it) {
+        it = it || {};
+        if (it.type === "svg")
+          return {
+            type: "svg",
+            name: String(it.name || "SVG").slice(0, 40),
+            src: String(it.src || ""),
+            ar: Number.isFinite(it.ar) && it.ar > 0 ? it.ar : 1,
+            width: Math.max(16, Math.min(SW, parseFloat(it.width) || 200)),
+            x: Number.isFinite(it.x) ? it.x : SW / 2,
+            y: Number.isFinite(it.y) ? it.y : SH / 2,
+          };
+        return {
+          type: "text",
+          text: String(it.text == null ? "" : it.text).slice(0, 60),
+          color: it.color >= 0 && it.color <= 3 ? it.color | 0 : 0,
+          font: txtFontId(it.font),
+          size: Math.max(12, Math.min(220, parseInt(it.size, 10) || 64)),
+          bold: !!it.bold,
+          x: Number.isFinite(it.x) ? it.x : SW / 2,
+          y: Number.isFinite(it.y) ? it.y : SH / 2,
+        };
+      }
+
+      // 从 SVG 源码里取宽高比：优先 viewBox，其次 width/height 属性
+      function txtSvgAspect(text) {
+        const vb = /viewBox\s*=\s*["']\s*([-\d.eE+]+)[\s,]+([-\d.eE+]+)[\s,]+([-\d.eE+]+)[\s,]+([-\d.eE+]+)/.exec(
+          text,
+        );
+        if (vb) {
+          const w = parseFloat(vb[3]),
+            h = parseFloat(vb[4]);
+          if (w > 0 && h > 0) return w / h;
+        }
+        const wm = /<svg[^>]*\swidth\s*=\s*["']([\d.]+)/.exec(text);
+        const hm = /<svg[^>]*\sheight\s*=\s*["']([\d.]+)/.exec(text);
+        if (wm && hm && +wm[1] > 0 && +hm[1] > 0) return +wm[1] / +hm[1];
+        return 1;
+      }
+
+      let txtCfg = {
+        bg: "white",
+        snap: true,
+        name: "",
+        items: [txtNormItem({ text: "ColorInk", size: 72, bold: true })],
+      };
+      try {
+        const saved = JSON.parse(localStorage.getItem(TXT_KEY) || "null");
+        if (saved && Array.isArray(saved.items))
+          txtCfg = {
+            bg: saved.bg === "black" ? "black" : "white",
+            snap: saved.snap !== false,
+            name: String(saved.name || "").slice(0, 24),
+            items: saved.items.map(txtNormItem),
+          };
+      } catch (_) {}
+
+      const txtFrame = document.createElement("canvas");
+      txtFrame.width = SW;
+      txtFrame.height = SH;
+      let txtLabels = null,
+        txtPacked = null,
+        txtTimer = 0,
+        txtReady = false,
+        txtSel = txtCfg.items.length ? 0 : -1,
+        txtLayout = [],
+        txtGuides = { x: false, y: false };
+
+      // SVG 以 data URL 存进配置；img 解码完成后自动重绘一次
+      const txtImgs = new Map();
+      function txtGetImg(src) {
+        if (!src) return null;
+        let e = txtImgs.get(src);
+        if (!e) {
+          const img = new Image();
+          e = { img: img, ok: false };
+          txtImgs.set(src, e);
+          img.onload = () => {
+            e.ok = true;
+            txtScheduleRender();
+          };
+          img.onerror = () => {
+            e.ok = false;
+            txtScheduleRender();
+          };
+          img.src = src;
+        }
+        return e;
+      }
+
+      function txtFontOf(it) {
+        const f =
+          TXT_FONTS.find((x) => x.id === it.font) || TXT_FONTS[0];
+        return (it.bold ? 700 : 400) + " " + it.size + "px " + f.css;
+      }
+      function txtSvgBounds(it) {
+        const w = it.width;
+        const h = w / (it.ar > 0 ? it.ar : 1);
+        return { x: it.x - w / 2, y: it.y - h / 2, w: w, h: h };
+      }
+      // 画一个元素并返回它的包围盒，文字与 SVG 共用同一套布局信息
+      function txtDrawItem(c, it, pal) {
+        c.imageSmoothingEnabled = true;
+        c.imageSmoothingQuality = "high";
+        if (it.type === "svg") {
+          const b = txtSvgBounds(it);
+          const e = txtGetImg(it.src);
+          if (e && e.ok) c.drawImage(e.img, b.x, b.y, b.w, b.h);
+          return b;
+        }
+        c.font = txtFontOf(it);
+        c.fillStyle = pal[it.color] || pal[0];
+        c.fillText(it.text || "", it.x, it.y);
+        return txtMeasure(c, it);
+      }
+      function txtMeasure(ctx, it) {
+        ctx.font = txtFontOf(it);
+        const m = ctx.measureText(it.text || "");
+        const w = m.width || 0;
+        const asc = m.actualBoundingBoxAscent || 0;
+        const desc = m.actualBoundingBoxDescent || 0;
+        const h = Math.max(it.size, asc + desc);
+        return { x: it.x - w / 2, y: it.y - h / 2, w: w, h: h };
+      }
+
+      // 源帧：用理想四色绘制，供量化使用
+      function txtDrawFrame() {
+        const c = txtFrame.getContext("2d");
+        c.fillStyle = txtCfg.bg === "black" ? CAL_INK : CAL_WHITE;
+        c.fillRect(0, 0, SW, SH);
+        c.textAlign = "center";
+        c.textBaseline = "middle";
+        txtLayout = [];
+        txtCfg.items.forEach((it, i) => {
+          txtLayout.push(
+            Object.assign(
+              { i: i, type: it.type },
+              txtDrawItem(c, it, QUANT_PAL),
+            ),
+          );
+        });
+      }
+
+      // 拖动过程中的即时预览：不做量化，直接用显示色板画，够快且所见即所得
+      function txtPaintLive() {
+        const c = $("txtPreview").getContext("2d");
+        c.fillStyle = DISPLAY_PAL[txtCfg.bg === "black" ? 0 : 1];
+        c.fillRect(0, 0, SW, SH);
+        c.textAlign = "center";
+        c.textBaseline = "middle";
+        txtLayout = [];
+        txtCfg.items.forEach((it, i) => {
+          txtLayout.push(
+            Object.assign(
+              { i: i, type: it.type },
+              txtDrawItem(c, it, DISPLAY_PAL),
+            ),
+          );
+        });
+      }
+
+      function txtPaintPreview() {
+        if (!txtLabels) return;
+        const cv = $("txtPreview");
+        const img = new ImageData(SW, SH);
+        const d = img.data;
+        const pal = DISPLAY_PAL.map(hexToRgb);
+        for (let i = 0, p = 0; i < PIXELS; i++, p += 4) {
+          const c = pal[txtLabels[i]];
+          d[p] = c[0];
+          d[p + 1] = c[1];
+          d[p + 2] = c[2];
+          d[p + 3] = 255;
+        }
+        cv.getContext("2d").putImageData(img, 0, 0);
+      }
+
+      function txtSyncGuides() {
+        const it = txtCfg.items[txtSel];
+        txtGuides.x = !!(txtCfg.snap && it && Math.abs(it.x - SW / 2) < 0.5);
+        txtGuides.y = !!(txtCfg.snap && it && Math.abs(it.y - SH / 2) < 0.5);
+      }
+
+      // 叠加层只画选择框和吸附参考线，不污染实际帧
+      function txtDrawOverlay() {
+        const c = $("txtOverlay").getContext("2d");
+        c.clearRect(0, 0, SW, SH);
+        if (txtCfg.snap && txtSel >= 0) {
+          c.save();
+          c.strokeStyle = "rgba(47,155,255,0.3)";
+          c.lineWidth = 1.5;
+          c.setLineDash([10, 10]);
+          c.beginPath();
+          c.moveTo(SW / 2, 0);
+          c.lineTo(SW / 2, SH);
+          c.moveTo(0, SH / 2);
+          c.lineTo(SW, SH / 2);
+          c.stroke();
+          c.restore();
+        }
+        c.save();
+        c.strokeStyle = "rgba(47,155,255,0.95)";
+        c.lineWidth = 2;
+        c.setLineDash([16, 10]);
+        c.beginPath();
+        if (txtGuides.x) {
+          c.moveTo(SW / 2, 0);
+          c.lineTo(SW / 2, SH);
+        }
+        if (txtGuides.y) {
+          c.moveTo(0, SH / 2);
+          c.lineTo(SW, SH / 2);
+        }
+        c.stroke();
+        c.restore();
+        if (txtSel < 0) return;
+        const b = txtLayout.find((x) => x.i === txtSel);
+        if (!b) return;
+        c.save();
+        c.strokeStyle = "rgba(47,155,255,0.95)";
+        c.lineWidth = 2;
+        c.setLineDash([12, 7]);
+        c.strokeRect(b.x - 8, b.y - 8, b.w + 16, b.h + 16);
+        c.restore();
+      }
+
+      function txtSave() {
+        try {
+          localStorage.setItem(TXT_KEY, JSON.stringify(txtCfg));
+        } catch (_) {}
+      }
+
+      function txtRender() {
+        if (!txtReady) return;
+        const err = $("txtErr");
+        err.textContent = "";
+        try {
+          txtCfg.bg = $("txtBg").value === "black" ? "black" : "white";
+          txtCfg.snap = $("txtSnap").value === "on";
+          txtCfg.name = $("txtName").value.slice(0, 24);
+          txtSave();
+          txtDrawFrame();
+          txtLabels = calQuantize(txtFrame);
+          txtPacked = calPackLabels(txtLabels);
+          txtPaintPreview();
+          txtSyncGuides();
+          txtDrawOverlay();
+        } catch (e) {
+          txtPacked = null;
+          txtLabels = null;
+          err.textContent = "文字生成失败：" + e.message;
+          console.error(e);
+        }
+        updateTxtBtn();
+      }
+
+      function txtScheduleRender() {
+        clearTimeout(txtTimer);
+        txtTimer = setTimeout(txtRender, 70);
+      }
+
+      function updateTxtBtn() {
+        const b = $("txtUpload");
+        if (b) b.disabled = !(txtPacked && connected && !busy);
+        $("txtCenter").disabled = txtSel < 0;
+        $("txtRemove").disabled = txtSel < 0;
+      }
+
+      function txtSelect(i) {
+        txtSel = i;
+        for (const card of $("txtList").children)
+          if (card.dataset && card.dataset.i !== undefined)
+            card.classList.toggle("sel", +card.dataset.i === i);
+        txtSyncGuides();
+        txtDrawOverlay();
+        updateTxtBtn();
+      }
+
+      function txtSyncSwatches() {
+        DISPLAY_PAL.forEach((h, i) => {
+          const el = $("txtSw" + i);
+          if (el) el.style.background = h;
+        });
+      }
+
+      function txtRenderList() {
+        const box = $("txtList");
+        box.textContent = "";
+        txtCfg.items.forEach((it, i) => {
+          const card = document.createElement("div");
+          card.className = "txtitem" + (i === txtSel ? " sel" : "");
+          card.dataset.i = String(i);
+
+          const head = document.createElement("div");
+          head.className = "txtitem-head";
+          const idx = document.createElement("span");
+          idx.className = "txtidx";
+          idx.textContent = String(i + 1);
+          head.appendChild(idx);
+
+          const opts = document.createElement("div");
+          opts.className = "txtitem-opts";
+
+          if (it.type === "svg") {
+            const thumb = document.createElement("img");
+            thumb.className = "svgthumb";
+            thumb.src = it.src;
+            thumb.alt = "";
+            const name = document.createElement("span");
+            name.className = "svgname";
+            name.textContent = it.name || "SVG";
+            head.append(thumb, name);
+
+            const widthLbl = document.createElement("label");
+            widthLbl.className = "txtwidth";
+            widthLbl.append("宽度");
+            const winp = document.createElement("input");
+            winp.type = "number";
+            winp.className = "txtwidth-input";
+            winp.min = "16";
+            winp.max = String(SW);
+            winp.step = "2";
+            winp.value = String(Math.round(it.width));
+            widthLbl.appendChild(winp);
+
+            const hint = document.createElement("span");
+            hint.className = "svghint";
+            hint.textContent =
+              "高 " + Math.round(it.width / (it.ar || 1)) + " px";
+            opts.append(widthLbl, hint);
+          } else {
+            const inp = document.createElement("input");
+            inp.type = "text";
+            inp.className = "txtinput";
+            inp.maxLength = 60;
+            inp.placeholder = "输入文字";
+            inp.value = it.text;
+            head.appendChild(inp);
+
+            const cols = document.createElement("div");
+            cols.className = "txtcolors";
+            ["黑色", "白色", "黄色", "红色"].forEach((name, c) => {
+              const b = document.createElement("button");
+              b.type = "button";
+              b.className = "sw" + (it.color === c ? " on" : "");
+              b.dataset.c = String(c);
+              b.style.setProperty("--c", QUANT_PAL[c]);
+              b.title = name;
+              cols.appendChild(b);
+            });
+            const font = document.createElement("label");
+            font.className = "txtfont";
+            font.append("字体");
+            const fsel = document.createElement("select");
+            for (const f of TXT_FONTS) {
+              const o = document.createElement("option");
+              o.value = f.id;
+              o.textContent = f.label;
+              fsel.appendChild(o);
+            }
+            fsel.value = it.font;
+            font.appendChild(fsel);
+
+            const size = document.createElement("label");
+            size.className = "txtsize";
+            size.append("字号");
+            const num = document.createElement("input");
+            num.type = "number";
+            num.min = "12";
+            num.max = "220";
+            num.step = "2";
+            num.value = String(it.size);
+            size.appendChild(num);
+
+            const bold = document.createElement("label");
+            bold.className = "check txtbold";
+            const chk = document.createElement("input");
+            chk.type = "checkbox";
+            chk.checked = !!it.bold;
+            bold.append(chk, " 粗体");
+
+            opts.append(cols, font, size, bold);
+          }
+          card.append(head, opts);
+          box.appendChild(card);
+        });
+        if (!txtCfg.items.length) {
+          const empty = document.createElement("div");
+          empty.className = "empty";
+          empty.textContent = "还没有元素，点下方「添加文字」或「添加 SVG」";
+          box.appendChild(empty);
+        }
+        updateTxtBtn();
+      }
+
+      function txtDownload() {
+        if (!txtLabels) return;
+        const c = document.createElement("canvas");
+        c.width = SW;
+        c.height = SH;
+        const img = new ImageData(SW, SH);
+        const data = img.data;
+        for (let i = 0, p = 0; i < PIXELS; i++, p += 4) {
+          const rgb = QUANT_RGB[txtLabels[i]];
+          data[p] = rgb[0];
+          data[p + 1] = rgb[1];
+          data[p + 2] = rgb[2];
+          data[p + 3] = 255;
+        }
+        c.getContext("2d").putImageData(img, 0, 0);
+        const a = document.createElement("a");
+        a.href = c.toDataURL("image/png");
+        a.download = "colorink_text_" + calYmd(new Date()) + ".png";
+        a.click();
+      }
+
+      function txtAddItem() {
+        if (txtCfg.items.length >= TXT_MAX_ITEMS) {
+          toast("最多 " + TXT_MAX_ITEMS + " 段文字", 2200, "bad");
+          return;
+        }
+        txtCfg.items.push(
+          txtNormItem({
+            text: "新文字",
+            color: 0,
+            size: 64,
+            bold: false,
+            x: SW / 2,
+            y: SH / 2,
+          }),
+        );
+        txtSel = txtCfg.items.length - 1;
+        txtRenderList();
+        txtRender();
+        const inputs = $("txtList").querySelectorAll(".txtinput");
+        const last = inputs[inputs.length - 1];
+        if (last) {
+          last.focus();
+          last.select();
+        }
+      }
+
+      function txtInit() {
+        if (txtReady) return;
+        txtReady = true;
+        $("txtBg").value = txtCfg.bg;
+        $("txtSnap").value = txtCfg.snap ? "on" : "off";
+        $("txtName").value = txtCfg.name || "";
+        txtRenderList();
+        txtSyncSwatches();
+
+        for (const id of ["txtBg", "txtSnap"])
+          $(id).addEventListener("change", txtScheduleRender);
+        $("txtName").addEventListener("input", () => {
+          txtCfg.name = $("txtName").value.slice(0, 24);
+          txtSave();
+        });
+        $("txtAdd").addEventListener("click", txtAddItem);
+        $("txtAddSvg").addEventListener("click", () => $("txtSvgFile").click());
+        $("txtSvgFile").addEventListener("change", (e) => {
+          const f = e.target.files && e.target.files[0];
+          e.target.value = "";
+          if (!f) return;
+          const err = $("txtErr");
+          err.textContent = "";
+          if (!/\.svg$/i.test(f.name) && f.type !== "image/svg+xml") {
+            err.textContent = "请选择 SVG 文件";
+            return;
+          }
+          if (f.size > TXT_SVG_MAX_BYTES) {
+            err.textContent =
+              "SVG 文件过大（上限 " + TXT_SVG_MAX_BYTES / 1024 + " KB）";
+            return;
+          }
+          if (txtCfg.items.length >= TXT_MAX_ITEMS) {
+            err.textContent = "最多 " + TXT_MAX_ITEMS + " 个元素";
+            return;
+          }
+          if (
+            txtCfg.items.filter((x) => x.type === "svg").length >= TXT_MAX_SVGS
+          ) {
+            err.textContent = "最多 " + TXT_MAX_SVGS + " 个 SVG";
+            return;
+          }
+          const reader = new FileReader();
+          reader.onload = () => {
+            const text = String(reader.result || "");
+            if (!/<svg[\s>]/i.test(text)) {
+              err.textContent = "不是有效的 SVG 文件";
+              return;
+            }
+            const src =
+              "data:image/svg+xml;charset=utf-8," + encodeURIComponent(text);
+            txtCfg.items.push(
+              txtNormItem({
+                type: "svg",
+                name: f.name,
+                src: src,
+                ar: txtSvgAspect(text),
+                width: 200,
+                x: SW / 2,
+                y: SH / 2,
+              }),
+            );
+            txtSel = txtCfg.items.length - 1;
+            txtRenderList();
+            txtRender();
+          };
+          reader.onerror = () => {
+            err.textContent = "SVG 读取失败";
+          };
+          reader.readAsText(f);
+        });
+        $("txtCenter").addEventListener("click", () => {
+          const it = txtCfg.items[txtSel];
+          if (!it) return;
+          it.x = SW / 2;
+          it.y = SH / 2;
+          txtRender();
+        });
+        $("txtRemove").addEventListener("click", () => {
+          if (txtSel < 0) return;
+          txtCfg.items.splice(txtSel, 1);
+          txtSel = Math.min(txtSel, txtCfg.items.length - 1);
+          txtRenderList();
+          txtRender();
+        });
+        $("txtPng").addEventListener("click", txtDownload);
+        $("txtUpload").addEventListener("click", () => {
+          if (!txtPacked) return;
+          guarded(() =>
+            uploadImage(
+              safeName($("txtName").value, "文字"),
+              txtPacked,
+              $("txtUpload"),
+            ),
+          );
+        });
+
+        // 列表编辑：输入/字号/粗体直接改状态，点色块改颜色
+        const box = $("txtList");
+        box.addEventListener("input", (e) => {
+          const card = e.target.closest(".txtitem");
+          if (!card) return;
+          const it = txtCfg.items[+card.dataset.i];
+          if (!it) return;
+          if (e.target.classList.contains("txtinput")) {
+            it.text = e.target.value.slice(0, 60);
+          } else if (e.target.classList.contains("txtwidth-input")) {
+            it.width = Math.max(
+              16,
+              Math.min(SW, parseFloat(e.target.value) || 16),
+            );
+            const hint = card.querySelector(".svghint");
+            if (hint)
+              hint.textContent =
+                "高 " + Math.round(it.width / (it.ar || 1)) + " px";
+          } else if (e.target.type === "number") {
+            it.size = Math.max(
+              12,
+              Math.min(220, parseInt(e.target.value, 10) || 12),
+            );
+          } else if (e.target.type === "checkbox") {
+            it.bold = e.target.checked;
+          } else return;
+          txtScheduleRender();
+        });
+        box.addEventListener("change", (e) => {
+          if (e.target.tagName !== "SELECT") return;
+          const card = e.target.closest(".txtitem");
+          if (!card) return;
+          const it = txtCfg.items[+card.dataset.i];
+          if (!it) return;
+          it.font = txtFontId(e.target.value);
+          txtScheduleRender();
+        });
+        box.addEventListener("click", (e) => {
+          const card = e.target.closest(".txtitem");
+          if (!card) return;
+          const i = +card.dataset.i;
+          txtSelect(i);
+          const sw = e.target.closest(".sw");
+          if (!sw) return;
+          const it = txtCfg.items[i];
+          it.color = +sw.dataset.c;
+          for (const b of card.querySelectorAll(".sw"))
+            b.classList.toggle("on", b === sw);
+          txtScheduleRender();
+        });
+
+        // 画布拖动：命中测试用当前布局，靠近中线按屏幕距离吸附
+        const ov = $("txtOverlay");
+        let drag = null,
+          raf = 0;
+        function paintLive() {
+          raf = 0;
+          txtPaintLive();
+          txtDrawOverlay();
+        }
+        function framePoint(e) {
+          const r = ov.getBoundingClientRect();
+          return {
+            x: ((e.clientX - r.left) / r.width) * SW,
+            y: ((e.clientY - r.top) / r.height) * SH,
+            scale: SW / r.width,
+          };
+        }
+        ov.addEventListener("pointerdown", (e) => {
+          if (e.button !== undefined && e.button !== 0) return;
+          const p = framePoint(e);
+          let hit = -1;
+          for (let k = txtLayout.length - 1; k >= 0; k--) {
+            const b = txtLayout[k];
+            if (
+              p.x >= b.x - 14 &&
+              p.x <= b.x + b.w + 14 &&
+              p.y >= b.y - 14 &&
+              p.y <= b.y + b.h + 14
+            ) {
+              hit = b.i;
+              break;
+            }
+          }
+          txtSelect(hit);
+          if (hit < 0) return;
+          const b = txtLayout.find((x) => x.i === hit);
+          const it = txtCfg.items[hit];
+          drag = {
+            i: hit,
+            sx: e.clientX,
+            sy: e.clientY,
+            bx: it.x,
+            by: it.y,
+            halfW: b.w / 2,
+            halfH: b.h / 2,
+            scale: p.scale,
+          };
+          ov.classList.add("grabbing");
+          try {
+            ov.setPointerCapture(e.pointerId);
+          } catch (_) {}
+          e.preventDefault();
+        });
+        ov.addEventListener("pointermove", (e) => {
+          if (!drag) return;
+          const it = txtCfg.items[drag.i];
+          if (!it) return;
+          const rect = ov.getBoundingClientRect();
+          const dx = (e.clientX - drag.sx) * drag.scale;
+          const dy = (e.clientY - drag.sy) * drag.scale;
+          const thr = (12 * SW) / rect.width;
+          let nx = drag.bx + dx,
+            ny = drag.by + dy;
+          txtGuides.x = false;
+          txtGuides.y = false;
+          if (txtCfg.snap) {
+            if (Math.abs(nx - SW / 2) <= thr) {
+              nx = SW / 2;
+              txtGuides.x = true;
+            }
+            if (Math.abs(ny - SH / 2) <= thr) {
+              ny = SH / 2;
+              txtGuides.y = true;
+            }
+          }
+          it.x = Math.round(
+            drag.halfW * 2 >= SW
+              ? SW / 2
+              : Math.max(drag.halfW, Math.min(SW - drag.halfW, nx)),
+          );
+          it.y = Math.round(
+            drag.halfH * 2 >= SH
+              ? SH / 2
+              : Math.max(drag.halfH, Math.min(SH - drag.halfH, ny)),
+          );
+          if (!raf) raf = requestAnimationFrame(paintLive);
+          e.preventDefault();
+        });
+        function endDrag(e) {
+          if (!drag) return;
+          drag = null;
+          ov.classList.remove("grabbing");
+          if (raf) {
+            cancelAnimationFrame(raf);
+            raf = 0;
+          }
+          try {
+            if (e && e.pointerId !== undefined)
+              ov.releasePointerCapture(e.pointerId);
+          } catch (_) {}
+          txtRender();
+        }
+        ov.addEventListener("pointerup", endDrag);
+        ov.addEventListener("pointercancel", endDrag);
+
+        txtRender();
+      }
+
       // ── 上传（BLE 通道）──────────────────────────────────────────
       // 名称只留可打印字符 / 中文，禁 ':'（固件按最后一个 ':' 切分数字，但别考验它）
       function safeName(s, fallback) {
@@ -3104,11 +3851,11 @@
       $("btnSelfTest").addEventListener("click", () => guarded(selfTest));
       calInit();
 
-      const PAGE_VER = "2026-11-02a"; // 每次改本页都改这里：用来确认浏览器加载的不是缓存旧版
+      const PAGE_VER = "2026-11-15c"; // 每次改本页都改这里：用来确认浏览器加载的不是缓存旧版
       log(
         "页面就绪 v" +
           PAGE_VER +
-          "。蓝牙连接（手机/电脑）或串口连接（电脑 Chrome/Edge）→ 上传页选图转四色并显示，日历页生成并下发日历，图库页管理已传图片，调试页看日志。",
+          "。蓝牙连接（手机/电脑）或串口连接（电脑 Chrome/Edge）→ 上传页选图转四色并显示，日历页生成并下发日历，文字页排版文字与 SVG，图库页管理已传图片，调试页看日志。",
       );
       log(
         "本地试跑：在本目录执行 python -m http.server 8000，然后开 http://localhost:8000/ble_test.html",

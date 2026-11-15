@@ -767,6 +767,168 @@
         font-weight: 500;
       }
 
+      /* ── 自定义文字 ─────────────────────────────────────── */
+      /* 编辑态需要更宽的预览，方便直接拖字；窄屏在媒体查询里退回单列 */
+      #txtConvert {
+        grid-template-columns: minmax(0, 1fr) minmax(320px, 430px);
+      }
+      .txtlist {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .txtlist .empty {
+        padding: 20px 12px;
+      }
+      .txtitem {
+        border: 1px solid var(--line);
+        background: #121519;
+        border-radius: 10px;
+        padding: 10px 12px;
+        cursor: pointer;
+        transition:
+          border-color 0.12s,
+          background 0.12s;
+      }
+      .txtitem:hover {
+        border-color: var(--line-strong);
+      }
+      .txtitem.sel {
+        border-color: rgba(47, 155, 255, 0.6);
+        background: rgba(47, 155, 255, 0.06);
+      }
+      .txtitem-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .txtidx {
+        flex: none;
+        width: 20px;
+        height: 20px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--line);
+        border-radius: 50%;
+        background: #0d1013;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--dim);
+      }
+      .txtinput {
+        flex: 1;
+        width: 100%;
+        min-width: 0;
+      }
+      .txtitem-opts {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 10px 14px;
+        margin-top: 9px;
+      }
+      .txtcolors {
+        display: flex;
+        gap: 6px;
+      }
+      .txtcolors .sw {
+        width: 24px;
+        height: 24px;
+        min-height: 0;
+        padding: 0;
+        border: 2px solid var(--line-strong);
+        border-radius: 50%;
+        background: var(--c);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+      }
+      .txtcolors .sw:hover:not(:disabled) {
+        border-color: #5b6570;
+        background: var(--c);
+      }
+      .txtcolors .sw.on {
+        border-color: var(--text);
+        box-shadow:
+          inset 0 0 0 1px rgba(0, 0, 0, 0.25),
+          0 0 0 2px rgba(255, 255, 255, 0.16);
+      }
+      .txtfont,
+      .txtsize,
+      .txtwidth {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--dim);
+      }
+      .txtfont select {
+        padding: 6px 8px;
+        font-size: 12.5px;
+      }
+      .txtsize input {
+        width: 68px;
+      }
+      .txtwidth input {
+        width: 72px;
+      }
+      .svgthumb {
+        flex: none;
+        width: 30px;
+        height: 30px;
+        padding: 2px;
+        object-fit: contain;
+        background: #fff;
+        border: 1px solid var(--line-strong);
+        border-radius: 5px;
+      }
+      .svgname {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+        color: var(--text);
+      }
+      .svghint {
+        font-family: var(--mono);
+        font-size: 11.5px;
+        color: var(--faint);
+      }
+      .txtstage {
+        position: relative;
+        width: min(100%, 44vh);
+        aspect-ratio: 552 / 768;
+        margin: 10px auto 0;
+        line-height: 0;
+      }
+      .txtstage canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      #txtPreview {
+        border: 1px solid var(--line-strong);
+        border-radius: 5px;
+        background: #fff;
+        box-shadow:
+          0 0 0 9px #0b0d0f,
+          0 0 0 10px var(--line),
+          0 20px 44px rgba(0, 0, 0, 0.45);
+        image-rendering: pixelated;
+      }
+      #txtOverlay {
+        border-radius: 5px;
+        cursor: grab;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      #txtOverlay.grabbing {
+        cursor: grabbing;
+      }
+
       /* ── 图库列表 ───────────────────────────────────────── */
       #list {
         display: flex;
@@ -889,7 +1051,8 @@
           grid-template-columns: 1fr;
           gap: 20px;
         }
-        #calConvert.is-landscape {
+        #calConvert.is-landscape,
+        #txtConvert {
           grid-template-columns: 1fr;
         }
         .previewcol {
