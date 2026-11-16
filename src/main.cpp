@@ -55,7 +55,10 @@ void netServicePump()
 #ifdef INKSIGHT_BLE
     // 蓝牙固件没有网页/配网服务，但要在这里把 GATT 回包发出去：epd_driver 的
     // 刷新等待（~15s）里会无条件调用本函数，不泵的话页面在刷新期间收不到
-    // display:done，只能干等到超时。
+    // display:done，只能干等到超时。bleUploadPump 同理：刷新中到达的
+    // begin/end 等文件类命令也要照常处理，否则上位机会 4s 等 begin 超时。
+    // 二者与刷屏同属主循环任务，嵌套只是串行的文件系统操作，安全。
+    bleUploadPump();
     blePumpReplies();
 #else
     if (portalActive)
@@ -398,7 +401,11 @@ void setup()
     pinMode(PIN_CFG_BTN, INPUT_PULLUP);
     gpioInit();
 
+#ifndef INKSIGHT_BLE
+    // WiFi 凭据只在 WiFi build 有意义；BLE 固件全程不碰 WiFi，加载纯属浪费
+    // （NVS 读 + 最多 5 组 String 分配）。
     loadConfig();
+#endif
     galleryInit();
     Serial.printf("[BOOT] storage ready t=%lums\n", millis() - bootT0);
 

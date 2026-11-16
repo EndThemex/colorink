@@ -276,8 +276,69 @@
         teardown("连接已断开");
         link = null;
         setConnected(false);
-        if (unexpected) report("设备已断开（链路已失效，请重新连接）", "bad");
-        else report("已断开连接", "dim");
+        if (unexpected) {
+          report("设备意外断开，尝试自动重连…", "bad");
+          tryAutoReconnect();
+        } else report("已断开连接", "dim");
+      }
+
+      // 意外掉线后的自动重连：device 句柄在同一次授权会话内一直有效，可以直接
+      // device.gatt.connect()，不需要重新弹设备选择器。设备端断开后会立即恢复
+      // 广播，这里按退避重试 3 次；全部失败才提示手动重连。
+      let autoReconnecting = false;
+      async function tryAutoReconnect() {
+        if (autoReconnecting || !device) return;
+        autoReconnecting = true;
+        try {
+          for (let i = 0; i < 3 && !connected; i++) {
+            await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
+            if (!device || connected) break;
+            try {
+              await setupGatt();
+              log("✓ 自动重连成功", "ok");
+              report("已自动重连：" + (device.name || "(未命名)"), "ok");
+              await queryInfo();
+              await refreshList();
+              return;
+            } catch (err) {
+              log("重连失败（" + (err && err.message ? err.message : err) + "）", "bad");
+            }
+          }
+          if (!connected) {
+            // 全部失败：清掉 server 句柄，否则后续 gattserverdisconnected 会把
+            // "server 非空"误判为意外掉线，反复触发新一轮自动重连
+            teardown("自动重连失败");
+            link = null;
+            setConnected(false);
+            report("自动重连失败，请手动重新连接", "bad");
+          }
+        } finally {
+          autoReconnecting = false;
+        }
+      }
+
+      // 建立 GATT 链路的公共装配：取特征 → 订阅 → ping 探活。
+      // 手动连接与断线自动重连共用；device 由调用方保证已拿到授权。
+      async function setupGatt() {
+        server = await device.gatt.connect();
+        const svc = await server.getPrimaryService(SVC);
+        chCmd = await svc.getCharacteristic(CMD);
+        chData = await svc.getCharacteristic(DATA);
+        chStat = await svc.getCharacteristic(STAT);
+
+        await chStat.startNotifications();
+        chStat.addEventListener("characteristicvaluechanged", onStat);
+
+        noResp = typeof chData.writeValueWithoutResponse === "function";
+
+        const pong = waitFor((t) => t === "pong", 3000, "pong");
+        await writeCmd("ping");
+        await pong;
+        log("✓ 命令通道往返正常", "ok");
+
+        link = "ble";
+        connected = true;
+        setConnected(true);
       }
 
       async function connect() {
@@ -308,16 +369,7 @@
           });
           device.addEventListener("gattserverdisconnected", onGattDisconnected);
 
-          server = await device.gatt.connect();
-          const svc = await server.getPrimaryService(SVC);
-          chCmd = await svc.getCharacteristic(CMD);
-          chData = await svc.getCharacteristic(DATA);
-          chStat = await svc.getCharacteristic(STAT);
-
-          await chStat.startNotifications();
-          chStat.addEventListener("characteristicvaluechanged", onStat);
-
-          noResp = typeof chData.writeValueWithoutResponse === "function";
+          await setupGatt();
           report("已连接：" + (device.name || "(未命名)"), "ok");
           log(
             noResp
@@ -326,14 +378,6 @@
             noResp ? "ok" : "bad",
           );
 
-          const pong = waitFor((t) => t === "pong", 3000, "pong");
-          await writeCmd("ping");
-          await pong;
-          log("✓ 命令通道往返正常", "ok");
-
-          link = "ble";
-          connected = true;
-          setConnected(true);
           await queryInfo();
           await refreshList();
         } catch (err) {

@@ -32,9 +32,10 @@
 //   clear                   → clear:queued，完成后 → clear:done
 //   其它                    → err:unknown
 //
-// 流控：DATA 每累计收到 8192 字节回一条 ack:<累计字节数>。上位机按这个节奏等
-// 确认再继续发——writeValueWithoutResponse 是不排队的，猛灌会静默丢包，而丢包
-// 表现为图像整体错位，不是"传失败"这种能一眼看出来的现象。
+// 流控：DATA 每落盘 8192 字节回一条 ack:<已落盘字节数>（收到先进环形缓冲，
+// 主循环落盘后才确认）。上位机按这个节奏等确认再继续发——writeValueWithoutResponse
+// 是不排队的，猛灌会静默丢包，而丢包表现为图像整体错位，不是"传失败"这种
+// 能一眼看出来的现象。
 //
 // 校验：Adler-32（模 65521，逐字节），网页端有同一份实现，两边必须逐位一致。
 
@@ -46,6 +47,11 @@ bool bleModeStart();
 // 只把排队中的回包发出去。不执行刷屏、不碰 LED，因此可以在 epdWaitBusy 的
 // 15 秒刷新等待里安全调用——否则刷新期间页面收不到任何回包，只能干等到超时。
 void blePumpReplies();
+
+// 落盘上传环形缓冲，并执行排队中的文件类命令（begin/end/abort/reset/delete）。
+// 必须先于 blePumpReplies 调用，end/ack 的回包才排在实际落盘之后。
+// 与 blePumpReplies 一样可在 15s 刷新等待里调用（同任务串行，无并发）。
+void bleUploadPump();
 
 // 在主循环里调用：发回包 + 执行排队的刷屏/清屏 + 驱动 LED 状态灯。
 //
