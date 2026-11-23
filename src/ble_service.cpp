@@ -95,6 +95,10 @@ static volatile bool pendingClear = false;
 // 这次刷屏由按键触发：没有客户端在等 display:done，别发这条回包，
 // 否则页面会把它当成自己那条 display 请求的应答，提前结束/错位。
 static volatile bool pendingFromButton = false;
+// GATT 回调收到的 display:<id>：回调只解析参数，存在性校验要扫 LittleFS
+// 目录，必须留给主循环（见 ringPush 注释），校验和 display:queued 回包都在
+// handleDisplayRequest() 里做。
+static volatile int pendingDisplayReq = -1;
 
 // ── 回包发送 ────────────────────────────────────────────────
 
@@ -269,9 +273,41 @@ static void handleEnd()
         queueReply("end:fail:%s", err.c_str());
 }
 
-// 主循环泵：中止收尾 → 环形缓冲落盘 → 文件类命令。
+// 主循环处理 display:<id>：存在性校验 + display:queued 回包。
+// 回调里只解析出 id，扫目录这种阻塞操作统一在这里做。
+static void handleDisplayRequest()
+{
+    int id;
+    portENTER_CRITICAL(&pendingMux);
+    id = pendingDisplayReq;
+    pendingDisplayReq = -1;
+    portEXIT_CRITICAL(&pendingMux);
+    if (id < 0)
+        return;
+
+    // 上传中拒绝刷屏（与按键路径 bleRequestNextImage 的 uploading 保护一致）。
+    // 串口通道的上传同样在写 flash，所以用 galleryUploadBusy() 一并挡掉。
+    if (uploading || galleryUploadBusy())
+    {
+        queueReply("err:上传中，暂不能刷屏");
+        return;
+    }
+    if (!galleryExists(id))
+    {
+        queueReply("err:图片不存在");
+        return;
+    }
+    // 先入回包队列再置排队标志：保证 "queued" 一定排在 "done" 之前发出
+    queueReply("display:queued:%d", id);
+    portENTER_CRITICAL(&pendingMux);
+    pendingDisplayId = id;
+    portEXIT_CRITICAL(&pendingMux);
+}
+
+// 主循环泵：中止收尾 → 环形缓冲落盘 → 文件类命令 → display 请求。
 // 顺序不能反：end 之前必须把环里剩余数据全部落盘（size 校验才准），
-// abort 要先丢掉环里的残余再删文件。
+// abort 要先丢掉环里的残余再删文件；display 要在 end 之后判定，
+// 否则刚传完就刷屏会被 uploading 误挡。
 // 可以在 15s 刷新等待（netServicePump）里调用：与刷屏同属主循环任务，
 // 嵌套只是两次串行的文件系统操作，LittleFS 单任务访问安全。
 void bleUploadPump()
@@ -286,43 +322,45 @@ void bleUploadPump()
     }
     ringDrain();
 
-    if (!pendingCmdReady)
-        return;
     // 刷新中别执行 delete：文件正被刷屏流程读着，等下一轮
-    if (epdIsRendering() && strncmp(pendingCmd, "delete:", 7) == 0)
-        return;
-    pendingCmdReady = false;
-    std::string s(pendingCmd);
-    Serial.printf("[BLE] exec cmd '%s'\n", s.c_str());
+    if (pendingCmdReady &&
+        !(epdIsRendering() && strncmp(pendingCmd, "delete:", 7) == 0))
+    {
+        pendingCmdReady = false;
+        std::string s(pendingCmd);
+        Serial.printf("[BLE] exec cmd '%s'\n", s.c_str());
 
-    if (s == "reset")
-    {
-        resetTransferStats();
-        queueReply("reset:ok");
+        if (s == "reset")
+        {
+            resetTransferStats();
+            queueReply("reset:ok");
+        }
+        else if (s.rfind("begin:", 0) == 0)
+        {
+            handleBegin(s.substr(6));
+        }
+        else if (s == "end")
+        {
+            handleEnd();
+        }
+        else if (s == "abort")
+        {
+            ringTail = ringHead;
+            galleryUploadAbort();
+            uploading = false;
+            queueReply("abort:ok");
+        }
+        else if (s.rfind("delete:", 0) == 0)
+        {
+            long id = parseLong(s.c_str() + 7);
+            if (id >= 0 && galleryDeleteById((int)id))
+                queueReply("delete:ok:%d", (int)id);
+            else
+                queueReply("delete:fail:%d", (int)id);
+        }
     }
-    else if (s.rfind("begin:", 0) == 0)
-    {
-        handleBegin(s.substr(6));
-    }
-    else if (s == "end")
-    {
-        handleEnd();
-    }
-    else if (s == "abort")
-    {
-        ringTail = ringHead;
-        galleryUploadAbort();
-        uploading = false;
-        queueReply("abort:ok");
-    }
-    else if (s.rfind("delete:", 0) == 0)
-    {
-        long id = parseLong(s.c_str() + 7);
-        if (id >= 0 && galleryDeleteById((int)id))
-            queueReply("delete:ok:%d", (int)id);
-        else
-            queueReply("delete:fail:%d", (int)id);
-    }
+
+    handleDisplayRequest();
 }
 
 // ── GATT 回调 ───────────────────────────────────────────────
@@ -359,6 +397,8 @@ class ServerCB : public NimBLEServerCallbacks
         // 还没执行的文件类命令作废：断线前入队的 begin 会开出一个没有接收方
         // 的上传，uploading 卡在 true，自动深睡永远进不去。
         pendingCmdReady = false;
+        // display 请求同理：请求方已经走了，没必要再刷一次屏
+        pendingDisplayReq = -1;
 
         // 半截上传必须显式收尾：uploadFile 不关就一直占着句柄，残缺文件还会
         // 以正常命名留在 /img 里被列表当成一张能点却读不出来的图。
@@ -449,29 +489,19 @@ class CmdCB : public NimBLECharacteristicCallbacks
         }
         else if (s.rfind("display:", 0) == 0)
         {
-            // 上传中拒绝刷屏（与按键路径 bleRequestNextImage 的 uploading
-            // 保护一致）。galleryExists 只是一次快速目录查询，可以留在回调里；
-            // 真正的读图 + 15s 刷屏照旧排给主循环。串口通道的上传同样在写
-            // flash，所以用 galleryUploadBusy() 一并挡掉。
-            if (uploading || galleryUploadBusy())
+            // 只解析参数。存在性校验（galleryExists）要扫 LittleFS 目录，
+            // 不能在主机任务里做——flash 读停顿几十~几百 ms，会把在飞包挤爆。
+            // 上传中判定、存在性校验和 display:queued 回包全部交给主循环。
+            long id = parseLong(s.c_str() + 8);
+            if (id < 0)
             {
-                queueReply("err:上传中，暂不能刷屏");
+                queueReply("err:图片不存在");
             }
             else
             {
-                long id = parseLong(s.c_str() + 8);
-                if (id < 0 || !galleryExists((int)id))
-                {
-                    queueReply("err:图片不存在");
-                }
-                else
-                {
-                    // 先入回包队列再置排队标志：保证"queued"一定排在"done"之前发出
-                    queueReply("display:queued:%d", (int)id);
-                    portENTER_CRITICAL(&pendingMux);
-                    pendingDisplayId = (int)id;
-                    portEXIT_CRITICAL(&pendingMux);
-                }
+                portENTER_CRITICAL(&pendingMux);
+                pendingDisplayReq = (int)id;
+                portEXIT_CRITICAL(&pendingMux);
             }
         }
         else if (s == "clear")

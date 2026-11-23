@@ -166,18 +166,23 @@ String galleryListJson() {
                 n++;
             }
         }
+        // 按 id 升序：只排索引，不搬运 Entry —— Entry 里有 String，
+        // 每交换一次都是深拷贝，20 项最坏几百次 malloc/free，白白给堆添碎片。
+        int order[MAX_IMAGES];
+        for (int i = 0; i < n; i++) order[i] = i;
         for (int i = 0; i < n - 1; i++)
             for (int j = i + 1; j < n; j++)
-                if (entries[j].id < entries[i].id) {
-                    Entry t = entries[i]; entries[i] = entries[j]; entries[j] = t;
+                if (entries[order[j]].id < entries[order[i]].id) {
+                    int t = order[i]; order[i] = order[j]; order[j] = t;
                 }
 
         for (int i = 0; i < n; i++) {
+            const Entry &e = entries[order[i]];
             if (i > 0) json += ",";
-            json += "{\"id\":" + String(entries[i].id);
-            json += ",\"name\":\"" + jsonEscape(entries[i].name) + "\"";
-            json += ",\"size\":" + String((unsigned)entries[i].size);
-            if (entries[i].id == current) json += ",\"current\":true";
+            json += "{\"id\":" + String(e.id);
+            json += ",\"name\":\"" + jsonEscape(e.name) + "\"";
+            json += ",\"size\":" + String((unsigned)e.size);
+            if (e.id == current) json += ",\"current\":true";
             json += "}";
         }
     }
