@@ -1,3 +1,9 @@
+<!--
+@title: ColorInk 四色墨水屏 · 蓝牙 / 串口上传
+@tag: 工具, 墨水屏, 蓝牙
+@desc: 552 × 768 四色图片在浏览器本地完成量化，经 BLE 或 USB 串口直传，内置日历、文字排版、图库管理与链路自检
+@order: 30
+-->
 <!doctype html>
 <html lang="zh-CN">
   <head>
@@ -7,7 +13,11 @@
       content="width=device-width, initial-scale=1, viewport-fit=cover"
     />
     <meta name="theme-color" content="#0f1113" />
-    <title>ColorInk 图库（蓝牙 / 串口）</title>
+    <meta
+      name="description"
+      content="ColorInk 四色墨水屏上传工具：浏览器本地完成四色量化，支持 BLE 与 USB 串口直传，可生成日历、文字和 SVG 版面。"
+    />
+    <title>ColorInk 四色墨水屏 · 蓝牙 / 串口上传</title>
     <link rel="stylesheet" href="ble_test.css" />
   </head>
   <body>
@@ -47,6 +57,13 @@
               ios 蓝牙需用
               <b>Bluefy</b> 浏览器打开，并全程保持本页在前台——切到后台 BLE
               连接会在几十秒内断开。
+            </p>
+            <p>
+              连接失败时先看板上的
+              LED：<b>常亮</b>=链路已建立（问题在浏览器侧，把 Bluefy
+              彻底杀掉重开再连）；<b>慢闪</b>=没连上（设备可能已休眠或被系统占用：
+              按一下板上按键唤醒，并在 iPhone 设置→蓝牙 里忽略 ColorInk
+              后重试）。
             </p>
             <p>
               USB 串口需用电脑版 <b>Chrome / Edge</b>（同样是 https 或 localhost
@@ -167,7 +184,9 @@
                 <span><i id="sw1"></i>白</span>
                 <span><i id="sw2"></i>黄</span>
                 <span><i id="sw3"></i>红</span>
-                <span class="meta" id="pvMeta">552 × 768 · 四色 2bpp · 竖屏</span>
+                <span class="meta" id="pvMeta"
+                  >552 × 768 · 四色 2bpp · 竖屏</span
+                >
               </div>
             </div>
           </div>
@@ -323,7 +342,9 @@
                 <span><i id="calSw1"></i>白</span>
                 <span><i id="calSw2"></i>黄</span>
                 <span><i id="calSw3"></i>红</span>
-                <span class="meta" id="calMeta">552 × 768 竖版 · 四色 2bpp</span>
+                <span class="meta" id="calMeta"
+                  >552 × 768 竖版 · 四色 2bpp</span
+                >
               </div>
               <div class="note">
                 日历是浏览器生成的静态图片，日期变化后需重新生成并上传；设备无
@@ -363,6 +384,7 @@
                   <select id="txtBg">
                     <option value="white">白色</option>
                     <option value="black">黑色</option>
+                    <option value="image">图片</option>
                   </select>
                 </label>
                 <label class="field"
@@ -372,6 +394,36 @@
                     <option value="off">关闭</option>
                   </select>
                 </label>
+              </div>
+              <div id="txtBgImageRow" class="txtbgrow" hidden>
+                <button id="txtBgPick">选择背景图片</button>
+                <button id="txtBgClear" disabled>清除</button>
+                <input
+                  type="file"
+                  id="txtBgFile"
+                  accept="image/jpeg,image/png,image/webp"
+                  style="display: none"
+                />
+                <label class="txtbgfit"
+                  >填充
+                  <select id="txtBgFit">
+                    <option value="cover">铺满（裁边）</option>
+                    <option value="contain">完整（留白）</option>
+                  </select>
+                </label>
+                <label class="txtbgbright"
+                  >亮度
+                  <input
+                    type="range"
+                    id="txtBgBright"
+                    min="-60"
+                    max="60"
+                    step="5"
+                    value="0"
+                  />
+                  <span id="txtBgBrightVal">0</span>
+                </label>
+                <span id="txtBgName" class="txthint">未选择图片</span>
               </div>
               <div class="row" style="margin-top: 16px">
                 <input
@@ -387,9 +439,13 @@
               </div>
               <div class="err" id="txtErr"></div>
               <div class="note">
-                点选预览里的文字或 SVG 即可拖动；拖到画布中线附近会自动吸附对齐，并显示蓝色参考线。
-                文字颜色对应墨水屏的黑 / 白 / 黄 / 红四色，白字需要配合黑色背景；
-                SVG 按原色量化到四色，尺寸用卡片里的「宽度」调整。
+                点选预览里的文字或 SVG
+                即可拖动；拖到画布中线附近会自动吸附对齐，并显示蓝色参考线。
+                文字颜色对应墨水屏的黑 / 白 / 黄 /
+                红四色，白字需要配合黑色背景。背景选「图片」后可挑一张 JPG / PNG /
+                WebP 铺在底层，同样量化到四色；「亮度」用来压暗或提亮底图让文字更清楚，
+                图片会压缩后存在本机浏览器里。 SVG
+                按原色量化到四色，尺寸用卡片里的「宽度」调整。
               </div>
             </div>
             <div class="previewcol">

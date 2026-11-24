@@ -209,23 +209,164 @@
           return;
         }
         const bytes = new TextEncoder().encode(s);
+        if (!chCmd) throw new Error("命令通道未就绪（连接还没建立完）");
         if (typeof chCmd.writeValueWithResponse === "function")
           await chCmd.writeValueWithResponse(bytes);
-        else await chCmd.writeValue(bytes); // 旧实现兜底
+        else if (typeof chCmd.writeValue === "function")
+          await chCmd.writeValue(bytes); // 旧实现兜底
+        else
+          throw new Error(
+            "本浏览器的特征值没有可用的写入方法，请升级 Bluefy 或换 Chrome",
+          );
       }
 
-      // 图片裸字节：串口直接写，BLE 按特征值写入方式分流
+      // 按当前 noResp 选择写入方式。noResp 初始由特征属性决定（见 setupGatt），
+      // 运行时被设备拒绝时由 sendData 纠正。
+      async function writeDataChunk(slice) {
+        if (noResp && typeof chData.writeValueWithoutResponse === "function")
+          await chData.writeValueWithoutResponse(slice);
+        else if (typeof chData.writeValueWithResponse === "function")
+          await chData.writeValueWithResponse(slice);
+        else if (typeof chData.writeValue === "function")
+          await chData.writeValue(slice);
+        else
+          throw new Error(
+            "本浏览器的特征值没有可用的写入方法，请升级 Bluefy 或换 Chrome",
+          );
+      }
+
+      // 图片裸字节：串口直接写，BLE 按特征值写入方式分流。
+      // 返回真正写进去的字节数——iOS 的单次写入长度受 CoreBluetooth MTU 限制，
+      // 设备上报的 MTU 偏大时 WebKit 会直接抛错，这里减半重试并回报实际长度。
       async function sendData(slice) {
         if (link === "serial") {
           if (!serialWriter) throw new Error("串口未打开");
           await serialWriter.write(slice);
-          return;
+          return slice.length;
         }
-        if (noResp) await chData.writeValueWithoutResponse(slice);
-        else await chData.writeValueWithResponse(slice);
+        if (!chData) throw new Error("数据通道未就绪（连接还没建立完）");
+        try {
+          await writeDataChunk(slice);
+          return slice.length;
+        } catch (err) {
+          const name = (err && err.name) || "";
+          const message = (err && err.message) || "";
+          // 设备上报的 MTU 大于 iOS 实际可写长度：减半后重试，并把新的单包
+          // 长度留在 chunkSize 里，后续包直接按新值切分。
+          const tooLong =
+            slice.length > 20 && /too long|too large|length|longer/i.test(message);
+          if (tooLong) {
+            chunkSize = Math.max(20, Math.floor(slice.length / 2));
+            log(
+              "单包 " +
+                slice.length +
+                " 字节被拒（" +
+                message +
+                "），降到 " +
+                chunkSize +
+                " 字节重试",
+              "bad",
+            );
+            const half = slice.subarray(0, chunkSize);
+            await writeDataChunk(half);
+            return half.length;
+          }
+          // 特征没有 WRITE_NR 位时 iOS 会抛 NotSupportedError：整条链路改走
+          // 带响应写入，别再对每一包都撞一次同样的错误。
+          if (noResp && /NotSupported/i.test(name + " " + message)) {
+            noResp = false;
+            log("此特征不支持无响应写入，改走带响应写入（会慢一些）", "dim");
+            await writeDataChunk(slice);
+            return slice.length;
+          }
+          throw err;
+        }
       }
 
       // ── 连接 ────────────────────────────────────────────────────
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+      // 给任意 Promise 套一个超时。iOS 的 Web Bluetooth（Bluefy / WebBLE）在
+      // 某些状态下会让 gatt.connect() / getPrimaryService() 既不 resolve 也不
+      // reject，页面就永远停在"点了连接什么都没发生"。所有蓝牙等待都必须过这
+      // 一层，失败也要变成一条能读的报错。
+      function withTimeout(p, ms, label) {
+        // 超时之后原 Promise 仍可能迟到地 reject，先挂个空 catch 兜住，
+        // 免得控制台多出一条未处理异常
+        if (p && typeof p.catch === "function") p.catch(() => {});
+        let timer = null;
+        const guard = new Promise((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(label + "超时（" + ms / 1000 + "s）")),
+            ms,
+          );
+        });
+        return Promise.race([p, guard]).finally(() => clearTimeout(timer));
+      }
+
+      // iOS 的 CoreBluetooth 错误名和 Chromium 的文案完全不同，统一翻译成
+      // 用户能照着做的动作，别把 "NetworkError" 原样丢到界面上。
+      function explainBleError(err) {
+        const name = (err && err.name) || "";
+        const msg = (err && err.message) || String(err || "未知错误");
+        if (/NetworkError/i.test(name) || /network|connect failed/i.test(msg))
+          return (
+            "底层蓝牙连接失败。iPhone 常见三种原因：设备已被系统或别的 App 占着" +
+            "（设置→蓝牙 里忽略该设备后重试）、设备已休眠（按一下板上按键唤醒）、" +
+            "或者浏览器需要重启（Bluefy 完全上滑杀掉再开）。"
+          );
+        if (/SecurityError/i.test(name))
+          return "浏览器拒绝了这次请求：必须由用户点击触发，且页面要跑在 https 下。";
+        if (/NotSupportedError/i.test(name))
+          return (
+            "系统蓝牙不支持这个操作。iOS 上多为 GATT 缓存过期（换过固件后尤其常见），" +
+            "在系统蓝牙设置里忽略设备、重启 Bluefy 再连。"
+          );
+        if (/InvalidStateError/i.test(name)) return "设备状态异常，请重新连接。";
+        if (/NotFoundError/i.test(name))
+          return "没有选中设备，或浏览器没匹配到 ColorInk-XXXX。";
+        // 超时是最常见的 iOS 失败形态：链路层可能"看起来连上了"，但设备侧
+        // 一直不回包（被别的宿主占着 / 已休眠 / GATT 缓存过期）。
+        if (/超时/.test(msg))
+          return (
+            msg +
+            "。等不到设备应答，按顺序排查：① 按一下板上按键把设备唤醒（LED 开始慢闪）；" +
+            "② iPhone 设置→蓝牙 里忽略 ColorInk-XXXX 后重新连接；③ 完全杀掉 Bluefy 再开。"
+          );
+        return msg;
+      }
+
+      // 一次连接会话的序号：超时/被新请求取代之后，迟到的回调靠它作废
+      let connectSeq = 0;
+
+      // iOS 的 Bluefy 偶发匹配不到按名字过滤的设备（选择器一片空白），换成
+      // 「列出全部设备」再弹一次就能出。用户主动取消时不重试，免得连弹两次。
+      async function requestDeviceCompat() {
+        try {
+          return await withTimeout(
+            navigator.bluetooth.requestDevice({
+              filters: [{ namePrefix: "ColorInk" }], // 广播名以 ColorInk- 开头
+              optionalServices: [SVC], // 自定义服务必须在这里授权，否则取服务会失败
+            }),
+            120000,
+            "选择设备",
+          );
+        } catch (err) {
+          const name = (err && err.name) || "";
+          const msg = (err && err.message) || "";
+          if (/cancel/i.test(msg) || name !== "NotFoundError") throw err;
+          log("按名字过滤没找到设备，改成「列出全部设备」再弹一次…", "dim");
+          return await withTimeout(
+            navigator.bluetooth.requestDevice({
+              acceptAllDevices: true,
+              optionalServices: [SVC],
+            }),
+            120000,
+            "选择设备",
+          );
+        }
+      }
+
       // 上传按钮取决于「已连接 + 已有打包结果」，单独管理
       function updateUpBtn() {
         $("btnUpload").disabled = !(packed && connected && !busy);
@@ -256,6 +397,17 @@
       // 不清的话，下一次 connect 会复用到已经失效的 server / ch*，第一步
       // getPrimaryService 就会抛 "GATT Server is disconnected"。
       function teardown(reason) {
+        // 先退订再摘引用：旧的 chStat 留着不管，下一轮连接里它还会继续回调，
+        // 把上一条链路的通知混进来（iOS 上迟到的通知尤其多）。
+        if (chStat) {
+          try {
+            chStat.removeEventListener("characteristicvaluechanged", onStat);
+          } catch (_) {}
+          try {
+            const p = chStat.stopNotifications();
+            if (p && typeof p.catch === "function") p.catch(() => {});
+          } catch (_) {}
+        }
         server = null;
         chCmd = null;
         chData = null;
@@ -285,16 +437,21 @@
       // 意外掉线后的自动重连：device 句柄在同一次授权会话内一直有效，可以直接
       // device.gatt.connect()，不需要重新弹设备选择器。设备端断开后会立即恢复
       // 广播，这里按退避重试 3 次；全部失败才提示手动重连。
+      // 手动连接/断开都会 bump reconnectRound 让还在跑的这一轮立刻收手，否则两边
+      // 同时调 gatt.connect()，iOS 会报 "GATT operation already in progress"。
       let autoReconnecting = false;
+      let reconnectRound = 0;
       async function tryAutoReconnect() {
         if (autoReconnecting || !device) return;
         autoReconnecting = true;
+        const round = ++reconnectRound;
         try {
           for (let i = 0; i < 3 && !connected; i++) {
             await new Promise((r) => setTimeout(r, 1000 * (i + 1)));
-            if (!device || connected) break;
+            if (!device || connected || round !== reconnectRound) break;
             try {
               await setupGatt();
+              if (round !== reconnectRound) return;
               log("✓ 自动重连成功", "ok");
               report("已自动重连：" + (device.name || "(未命名)"), "ok");
               await queryInfo();
@@ -304,9 +461,12 @@
               log("重连失败（" + (err && err.message ? err.message : err) + "）", "bad");
             }
           }
-          if (!connected) {
+          if (!connected && round === reconnectRound) {
             // 全部失败：清掉 server 句柄，否则后续 gattserverdisconnected 会把
             // "server 非空"误判为意外掉线，反复触发新一轮自动重连
+            try {
+              if (device) device.gatt.disconnect();
+            } catch (_) {}
             teardown("自动重连失败");
             link = null;
             setConnected(false);
@@ -319,19 +479,38 @@
 
       // 建立 GATT 链路的公共装配：取特征 → 订阅 → ping 探活。
       // 手动连接与断线自动重连共用；device 由调用方保证已拿到授权。
+      // 每个 await 都过 withTimeout：iOS 上这里任何一步挂住，用户看到的就是
+      // "点了连接，页面毫无反应"，而且 busy 会一直是 true，整页按钮跟着废掉。
       async function setupGatt() {
-        server = await device.gatt.connect();
-        const svc = await server.getPrimaryService(SVC);
-        chCmd = await svc.getCharacteristic(CMD);
-        chData = await svc.getCharacteristic(DATA);
-        chStat = await svc.getCharacteristic(STAT);
+        report("正在连接 GATT…", "dim");
+        server = await withTimeout(device.gatt.connect(), 15000, "GATT 连接");
 
-        await chStat.startNotifications();
+        report("正在发现服务…", "dim");
+        const svc = await withTimeout(
+          server.getPrimaryService(SVC),
+          12000,
+          "发现 ColorInk 服务",
+        );
+        chCmd = await withTimeout(svc.getCharacteristic(CMD), 8000, "取命令特征");
+        chData = await withTimeout(svc.getCharacteristic(DATA), 8000, "取数据特征");
+        chStat = await withTimeout(svc.getCharacteristic(STAT), 8000, "取状态特征");
+
+        // 先挂监听、再订阅：设备在订阅生效的瞬间就可能推第一条通知，顺序反过来
+        // 会丢掉它，后面只能干等 pong 超时。
         chStat.addEventListener("characteristicvaluechanged", onStat);
+        await withTimeout(chStat.startNotifications(), 10000, "订阅状态通知");
 
-        noResp = typeof chData.writeValueWithoutResponse === "function";
+        // 优先按特征属性选写入方式：iOS 上对没有 WRITE_NR 位的特征调用
+        // writeValueWithoutResponse 会直接抛 NotSupportedError。属性字段缺失
+        // （老实现）时才退回纯特性检测；运行时被拒由 sendData 再纠正。
+        const dataProps = chData.properties || {};
+        if (dataProps.writeWithoutResponse === true)
+          noResp = typeof chData.writeValueWithoutResponse === "function";
+        else if (dataProps.write === true) noResp = false;
+        else noResp = typeof chData.writeValueWithoutResponse === "function";
 
-        const pong = waitFor((t) => t === "pong", 3000, "pong");
+        report("正在探活…", "dim");
+        const pong = waitFor((t) => t === "pong", 6000, "pong");
         await writeCmd("ping");
         await pong;
         log("✓ 命令通道往返正常", "ok");
@@ -341,40 +520,105 @@
         setConnected(true);
       }
 
+      // iOS 上第一次装配失败是常态（连上就断、GATT 缓存过期），干净地重来一次
+      // 基本都能过；Chromium 上一次就成，多这层没有副作用。
+      async function setupGattRetry() {
+        let last = null;
+        for (let i = 1; i <= 2; i++) {
+          try {
+            await setupGatt();
+            return;
+          } catch (err) {
+            last = err;
+            log(
+              "第 " +
+                i +
+                " 次装配链路失败（" +
+                ((err && err.name) || "Error") +
+                "）：" +
+                ((err && err.message) || err),
+              i < 2 ? "dim" : "bad",
+            );
+            // 超时/失败的那次链路可能还挂在系统层（iOS 上尤其明显），主动断一
+            // 次再重来，否则第二次 connect 大概率继续卡住。
+            try {
+              if (device) device.gatt.disconnect();
+            } catch (_) {}
+            teardown("连接重试");
+            if (i < 2) await sleep(800); // 让 iPhone 侧的旧连接彻底释放
+          }
+        }
+        throw last;
+      }
+
       async function connect() {
         if (!navigator.bluetooth) {
           log(
-            "✗ 拿不到 navigator.bluetooth：请用 https:// 或 http://localhost 打开本页",
+            "✗ 拿不到 navigator.bluetooth：iOS 请用 Bluefy 打开本页（Safari/Chrome 都不支持），" +
+              "桌面用 Chrome/Edge，且必须是 https:// 或 http://localhost",
             "bad",
           );
           return;
         }
 
-        // 切到蓝牙前先放开串口，两条链路不能同时占着设备
-        await closeSerial(true);
+        const seq = ++connectSeq;
+        // 让还在跑的自动重连立刻收手，避免同时调 gatt.connect()
+        reconnectRound++;
+
+        // ① 同步阶段，绝不跨 await：iOS 的 Web Bluetooth 要求 requestDevice 落在
+        //    用户手势的同一次任务里，前面多一个 await 就可能被判成"不是用户操作"
+        //    而静默失败。所以先清 BLE 句柄、立刻弹选择器，串口留到选完设备再关。
         teardown(null);
         link = null;
-
-        // 同一次页面会话内重复连接：先释放上一次的句柄，绝不复用。
         if (device && device.gatt.connected) {
           log("释放上一次的连接…", "dim");
-          device.gatt.disconnect();
+          try {
+            device.gatt.disconnect();
+          } catch (_) {}
         }
 
+        report("请在列表里选择 ColorInk-XXXX…");
         log("请求设备…（弹出的列表里选 ColorInk-XXXX）");
-        try {
-          device = await navigator.bluetooth.requestDevice({
-            filters: [{ namePrefix: "ColorInk" }], // 广播名以 ColorInk- 开头
-            optionalServices: [SVC], // 自定义服务必须在这里授权，否则取服务会失败
-          });
-          device.addEventListener("gattserverdisconnected", onGattDisconnected);
 
-          await setupGatt();
+        let dev = null;
+        try {
+          dev = await requestDeviceCompat();
+        } catch (err) {
+          if (seq !== connectSeq) return;
+          if (/cancel/i.test((err && err.message) || "")) {
+            report("已取消选择设备", "dim"); // 取消不是故障，别打红字
+            return;
+          }
+          throw err;
+        }
+
+        // 选择器停留期间又发起了一次连接：这个句柄直接放掉
+        if (seq !== connectSeq) {
+          try {
+            if (dev && dev.gatt) dev.gatt.disconnect();
+          } catch (_) {}
+          return;
+        }
+        if (!dev) return;
+
+        device = dev;
+        // 同一个 device 对象上别重复挂监听，否则掉线会触发多轮自动重连
+        if (!device.__ciDisconnectHooked) {
+          device.__ciDisconnectHooked = true;
+          device.addEventListener("gattserverdisconnected", onGattDisconnected);
+        }
+
+        // ② 选完设备再关串口：两条链路不能同时占着设备
+        await closeSerial(true);
+        if (seq !== connectSeq) return;
+
+        try {
+          await setupGattRetry();
           report("已连接：" + (device.name || "(未命名)"), "ok");
           log(
             noResp
-              ? "✓ 支持 writeValueWithoutResponse"
-              : "⚠ 本浏览器没有 writeValueWithoutResponse，回退为带响应写入（会慢很多）",
+              ? "✓ 数据特征使用无响应写入"
+              : "⚠ 数据特征不支持无响应写入，回退为带响应写入（会慢很多）",
             noResp ? "ok" : "bad",
           );
 
@@ -382,29 +626,35 @@
           await refreshList();
         } catch (err) {
           // 半途失败也要清干净：否则状态停在"device/server 非空但全是死的"，
-          // 下一次连接继续踩同一个坑。
+          // 下一次连接继续踩同一个坑。iOS 上挂起过的那次连接更要主动 disconnect，
+          // 否则系统层面还占着外设，下次 connect 会继续卡住。
+          try {
+            if (device) device.gatt.disconnect();
+          } catch (_) {}
           teardown("连接失败");
           link = null;
           setConnected(false);
-          if (/disconnected/i.test(err.message || "")) {
-            log(
-              "提示：链路多半还被宿主端的 GATT 缓存占着。关掉其它开着本页的标签页、" +
-                "在系统蓝牙设置里删除 ColorInk 设备，或长按板上 BOOT 键 2s 强制断开后再试。",
-              "dim",
-            );
-          } else if (/not found/i.test(err.message || "")) {
-            log(
-              "提示：设备上没有 ColorInk 的 GATT 服务——选到的多半是别的蓝牙设备，" +
-                "请重新连接并认准 ColorInk-XXXX。",
-              "dim",
-            );
-          }
+          log(
+            "失败原因（" +
+              ((err && err.name) || "Error") +
+              "）：" +
+              explainBleError(err),
+            "bad",
+          );
+          log(
+            "自查顺序：点连接后板上 LED 常亮 = 链路已建立（问题在浏览器侧，完全杀掉 Bluefy 重开再试）；" +
+              "LED 一直慢闪 = 根本没连上（设备可能已休眠或被系统占用：按一下板上按键唤醒，" +
+              "并在 iPhone 设置→蓝牙 里忽略 ColorInk 后重试）。",
+            "dim",
+          );
           throw err; // 交给 guarded 统一打红字
         }
       }
 
       function disconnect() {
         const linked = !!(device && device.gatt.connected);
+        // 手动断开也要让自动重连收手，否则刚断开就被重连回来
+        reconnectRound++;
         // 先收尾再断：这样 gattserverdisconnected 回调里能看出是主动断开，
         // 不会把它误报成意外的红字掉线。
         teardown("已主动断开");
@@ -813,7 +1063,6 @@
       // onProgress(sent)：每推完一批回调一次，用于状态行显示进度。
       async function sendBytes(buf, onProgress) {
         const total = buf.length;
-        const chunk = chunkSize;
         const step = link === "serial" ? SERIAL_ACK_STEP : ACK_STEP;
         const t0 = performance.now();
         let sent = 0,
@@ -821,9 +1070,10 @@
         while (sent < total) {
           const batchEnd = Math.min(sent + step, total);
           while (sent < batchEnd) {
-            const end = Math.min(sent + chunk, batchEnd);
-            await sendData(buf.subarray(sent, end));
-            sent = end;
+            // 不缓存 chunkSize：单包被 iOS 拒收时 sendData 会把它调小，
+            // 下一包必须立刻用新值，否则会反复超长。
+            const end = Math.min(sent + chunkSize, batchEnd);
+            sent += await sendData(buf.subarray(sent, end));
           }
           if (onProgress) onProgress(sent);
           if (sent < total) {
@@ -1831,6 +2081,7 @@
           } catch (_) {}
           syncDisplayPal();
           if (calLabels) calPaintPreview();
+          txtBgEnsureDisplay(true);
           if (txtLabels) {
             txtSyncSwatches();
             txtPaintPreview();
@@ -1846,6 +2097,7 @@
         } catch (_) {}
         syncDisplayPal();
         if (calLabels) calPaintPreview();
+        txtBgEnsureDisplay(true);
         if (txtLabels) {
           txtSyncSwatches();
           txtPaintPreview();
@@ -2931,6 +3183,9 @@
       const TXT_MAX_ITEMS = 12;
       const TXT_MAX_SVGS = 6;
       const TXT_SVG_MAX_BYTES = 128 * 1024; // SVG 源码要进 localStorage，别设太大
+      const TXT_BG_MAX_BYTES = 12 * 1024 * 1024; // 选原图的上限，存进浏览器前会压缩
+      const TXT_BG_STORE_W = 552,
+        TXT_BG_STORE_H = 768; // 存图最长边，够屏幕用且省 localStorage
 
       function txtFontId(id) {
         return TXT_FONTS.some((f) => f.id === id) ? id : "sans";
@@ -2979,6 +3234,9 @@
 
       let txtCfg = {
         bg: "white",
+        bgSrc: "",
+        bgFit: "cover",
+        bgBright: 0,
         snap: true,
         name: "",
         items: [txtNormItem({ text: "ColorInk", size: 72, bold: true })],
@@ -2987,7 +3245,17 @@
         const saved = JSON.parse(localStorage.getItem(TXT_KEY) || "null");
         if (saved && Array.isArray(saved.items))
           txtCfg = {
-            bg: saved.bg === "black" ? "black" : "white",
+            bg: txtBgMode(saved.bg),
+            bgSrc:
+              typeof saved.bgSrc === "string" &&
+              /^data:image\/(?:jpeg|png|webp);base64,/i.test(saved.bgSrc)
+                ? saved.bgSrc
+                : "",
+            bgFit: saved.bgFit === "contain" ? "contain" : "cover",
+            bgBright: Math.max(
+              -60,
+              Math.min(60, parseInt(saved.bgBright, 10) || 0),
+            ),
             snap: saved.snap !== false,
             name: String(saved.name || "").slice(0, 24),
             items: saved.items.map(txtNormItem),
@@ -3025,6 +3293,220 @@
           img.src = src;
         }
         return e;
+      }
+
+      // ── 图片背景 ────────────────────────────────────────────────
+      // 原图只用来排版；先把底图量化成四色缓存，拖动预览时直接贴图，避免每帧重算。
+      // frame 缓存用理想四色（进源帧再量化一次），display 缓存用校准后的显示色板。
+      let txtBgRaw = null, // 当前底图 Image
+        txtBgLabels = null,
+        txtBgFrameCanvas = null,
+        txtBgDisplayCanvas = null,
+        txtBgDisplayKey = "",
+        txtBgWarned = false;
+
+      function txtBgMode(v) {
+        return v === "black" || v === "image" ? v : "white";
+      }
+
+      function txtBgCanvasOf(labels, rgbPal) {
+        const cv = document.createElement("canvas");
+        cv.width = SW;
+        cv.height = SH;
+        const img = new ImageData(SW, SH);
+        const d = img.data;
+        for (let i = 0, p = 0; i < PIXELS; i++, p += 4) {
+          const c = rgbPal[labels[i]];
+          d[p] = c[0];
+          d[p + 1] = c[1];
+          d[p + 2] = c[2];
+          d[p + 3] = 255;
+        }
+        cv.getContext("2d").putImageData(img, 0, 0);
+        return cv;
+      }
+
+      function txtBgResetCanvas() {
+        txtBgRaw = null;
+        txtBgLabels = null;
+        txtBgFrameCanvas = null;
+        txtBgDisplayCanvas = null;
+        txtBgDisplayKey = "";
+      }
+
+      // 按当前填充方式 / 亮度，从原图重建四色底图缓存
+      function txtBgBuild() {
+        txtBgLabels = null;
+        txtBgFrameCanvas = null;
+        txtBgDisplayCanvas = null;
+        txtBgDisplayKey = "";
+        if (!txtBgRaw || !txtBgRaw.naturalWidth) return;
+        const src = document.createElement("canvas");
+        src.width = SW;
+        src.height = SH;
+        const sc = src.getContext("2d");
+        sc.fillStyle = QUANT_PAL[1]; // 留白区 / 透明像素统一成白
+        sc.fillRect(0, 0, SW, SH);
+        const iw = txtBgRaw.naturalWidth,
+          ih = txtBgRaw.naturalHeight;
+        const scale =
+          txtCfg.bgFit === "contain"
+            ? Math.min(SW / iw, SH / ih)
+            : Math.max(SW / iw, SH / ih);
+        const w = iw * scale,
+          h = ih * scale;
+        sc.imageSmoothingEnabled = true;
+        sc.imageSmoothingQuality = "high";
+        sc.drawImage(txtBgRaw, (SW - w) / 2, (SH - h) / 2, w, h);
+        const bright = txtCfg.bgBright | 0;
+        if (bright) {
+          const im = sc.getImageData(0, 0, SW, SH);
+          const d = im.data;
+          for (let i = 0; i < d.length; i += 4) {
+            d[i] = Math.max(0, Math.min(255, d[i] + bright));
+            d[i + 1] = Math.max(0, Math.min(255, d[i + 1] + bright));
+            d[i + 2] = Math.max(0, Math.min(255, d[i + 2] + bright));
+          }
+          sc.putImageData(im, 0, 0);
+        }
+        txtBgLabels = calQuantize(src);
+        txtBgFrameCanvas = txtBgCanvasOf(txtBgLabels, QUANT_RGB);
+        txtBgEnsureDisplay(true);
+      }
+
+      function txtBgEnsureDisplay(force) {
+        if (!txtBgLabels) return;
+        const key = DISPLAY_PAL.join(",");
+        if (!force && txtBgDisplayCanvas && txtBgDisplayKey === key) return;
+        txtBgDisplayCanvas = txtBgCanvasOf(
+          txtBgLabels,
+          DISPLAY_PAL.map(hexToRgb),
+        );
+        txtBgDisplayKey = key;
+      }
+
+      function txtBgPaint(c, forFrame) {
+        if (txtCfg.bg !== "image") return false;
+        if (!forFrame) txtBgEnsureDisplay(false);
+        const cv = forFrame ? txtBgFrameCanvas : txtBgDisplayCanvas;
+        if (!cv) return false;
+        c.drawImage(cv, 0, 0);
+        return true;
+      }
+
+      function txtBgClear() {
+        txtBgResetCanvas();
+        txtCfg.bgSrc = "";
+        const n = $("txtBgName");
+        if (n) n.textContent = "未选择图片";
+        const b = $("txtBgClear");
+        if (b) b.disabled = true;
+        txtSave();
+        txtScheduleRender();
+      }
+
+      // 从压缩后的 data URL 恢复底图（进入文字页 / 页面初次加载时调用）
+      function txtBgLoad(src) {
+        txtBgResetCanvas();
+        if (!src) return;
+        const img = new Image();
+        img.onload = () => {
+          if (txtCfg.bgSrc !== src) return; // 期间又换了图
+          txtBgRaw = img;
+          txtBgBuild();
+          const n = $("txtBgName");
+          if (n) n.textContent = "已载入保存的背景图片";
+          const b = $("txtBgClear");
+          if (b) b.disabled = false;
+          txtSave();
+          txtScheduleRender();
+        };
+        img.onerror = () => {
+          if (txtCfg.bgSrc !== src) return;
+          txtCfg.bgSrc = "";
+          if ($("txtBg").value === "image") $("txtBg").value = "white";
+          txtCfg.bg = "white";
+          const n = $("txtBgName");
+          if (n) n.textContent = "背景图片读取失败";
+          txtSave();
+          txtScheduleRender();
+        };
+        img.src = src;
+      }
+
+      // 选图后先缩到屏幕尺寸再压缩，避免 data URL 撑爆 localStorage
+      function txtBgCompress(img) {
+        const scale = Math.min(
+          1,
+          TXT_BG_STORE_W / img.naturalWidth,
+          TXT_BG_STORE_H / img.naturalHeight,
+        );
+        const cv = document.createElement("canvas");
+        cv.width = Math.max(1, Math.round(img.naturalWidth * scale));
+        cv.height = Math.max(1, Math.round(img.naturalHeight * scale));
+        const c = cv.getContext("2d");
+        c.fillStyle = "#ffffff"; // 透明 PNG 压成 JPEG 时不要变黑
+        c.fillRect(0, 0, cv.width, cv.height);
+        c.imageSmoothingEnabled = true;
+        c.imageSmoothingQuality = "high";
+        c.drawImage(img, 0, 0, cv.width, cv.height);
+        let url = cv.toDataURL("image/webp", 0.78);
+        if (!/^data:image\/webp/i.test(url))
+          url = cv.toDataURL("image/jpeg", 0.82);
+        return url;
+      }
+
+      function txtBgChoose(f) {
+        const err = $("txtErr");
+        err.textContent = "";
+        if (!/^image\/(jpeg|png|webp)$/i.test(f.type)) {
+          err.textContent = "请选择 JPG / PNG / WebP 图片";
+          return;
+        }
+        if (f.size > TXT_BG_MAX_BYTES) {
+          err.textContent =
+            "图片过大（上限 " + Math.round(TXT_BG_MAX_BYTES / 1048576) + " MB）";
+          return;
+        }
+        const reader = new FileReader();
+        reader.onerror = () => {
+          err.textContent = "图片读取失败";
+        };
+        reader.onload = () => {
+          const raw = new Image();
+          raw.onerror = () => {
+            err.textContent = "图片解码失败";
+          };
+          raw.onload = () => {
+            let src;
+            try {
+              src = txtBgCompress(raw);
+            } catch (e) {
+              err.textContent = "图片处理失败：" + e.message;
+              return;
+            }
+            // 用压缩后的图作排版源，预览与实际存盘内容一致
+            const stored = new Image();
+            stored.onerror = () => {
+              err.textContent = "压缩后的图片解码失败";
+            };
+            stored.onload = () => {
+              txtCfg.bgSrc = src;
+              txtBgRaw = stored;
+              txtBgWarned = false;
+              txtBgBuild();
+              $("txtBg").value = "image";
+              $("txtBgClear").disabled = false;
+              $("txtBgName").textContent =
+                f.name.slice(0, 20) + " · " + Math.round(src.length / 1024) + "KB";
+              txtSave();
+              txtRender();
+            };
+            stored.src = src;
+          };
+          raw.src = String(reader.result || "");
+        };
+        reader.readAsDataURL(f);
       }
 
       function txtFontOf(it) {
@@ -3065,8 +3547,10 @@
       // 源帧：用理想四色绘制，供量化使用
       function txtDrawFrame() {
         const c = txtFrame.getContext("2d");
-        c.fillStyle = txtCfg.bg === "black" ? CAL_INK : CAL_WHITE;
-        c.fillRect(0, 0, SW, SH);
+        if (!txtBgPaint(c, true)) {
+          c.fillStyle = txtCfg.bg === "black" ? CAL_INK : CAL_WHITE;
+          c.fillRect(0, 0, SW, SH);
+        }
         c.textAlign = "center";
         c.textBaseline = "middle";
         txtLayout = [];
@@ -3083,8 +3567,10 @@
       // 拖动过程中的即时预览：不做量化，直接用显示色板画，够快且所见即所得
       function txtPaintLive() {
         const c = $("txtPreview").getContext("2d");
-        c.fillStyle = DISPLAY_PAL[txtCfg.bg === "black" ? 0 : 1];
-        c.fillRect(0, 0, SW, SH);
+        if (!txtBgPaint(c, false)) {
+          c.fillStyle = DISPLAY_PAL[txtCfg.bg === "black" ? 0 : 1];
+          c.fillRect(0, 0, SW, SH);
+        }
         c.textAlign = "center";
         c.textBaseline = "middle";
         txtLayout = [];
@@ -3166,7 +3652,19 @@
       function txtSave() {
         try {
           localStorage.setItem(TXT_KEY, JSON.stringify(txtCfg));
+          return;
         } catch (_) {}
+        // 超配额时优先保住文字元素：丢掉背景图再存一次，并只提醒一次
+        if (txtCfg.bgSrc && !txtBgWarned) {
+          txtBgWarned = true;
+          try {
+            localStorage.setItem(
+              TXT_KEY,
+              JSON.stringify(Object.assign({}, txtCfg, { bgSrc: "" })),
+            );
+          } catch (_) {}
+          toast("浏览器存储不足：背景图仅本次有效，刷新后需重选", 4200, "bad");
+        }
       }
 
       function txtRender() {
@@ -3174,7 +3672,9 @@
         const err = $("txtErr");
         err.textContent = "";
         try {
-          txtCfg.bg = $("txtBg").value === "black" ? "black" : "white";
+          txtCfg.bg = txtBgMode($("txtBg").value);
+          $("txtBgImageRow").hidden = txtCfg.bg !== "image";
+          $("txtBgClear").disabled = !txtCfg.bgSrc;
           txtCfg.snap = $("txtSnap").value === "on";
           txtCfg.name = $("txtName").value.slice(0, 24);
           txtSave();
@@ -3383,13 +3883,51 @@
         if (txtReady) return;
         txtReady = true;
         $("txtBg").value = txtCfg.bg;
+        $("txtBgFit").value = txtCfg.bgFit;
+        $("txtBgBright").value = String(txtCfg.bgBright);
+        $("txtBgBrightVal").textContent = String(txtCfg.bgBright);
+        $("txtBgImageRow").hidden = txtCfg.bg !== "image";
+        $("txtBgClear").disabled = !txtCfg.bgSrc;
         $("txtSnap").value = txtCfg.snap ? "on" : "off";
         $("txtName").value = txtCfg.name || "";
         txtRenderList();
         txtSyncSwatches();
+        if (txtCfg.bgSrc) {
+          $("txtBgName").textContent = "已载入保存的背景图片";
+          txtBgLoad(txtCfg.bgSrc);
+        }
 
         for (const id of ["txtBg", "txtSnap"])
           $(id).addEventListener("change", txtScheduleRender);
+        $("txtBgPick").addEventListener("click", () => $("txtBgFile").click());
+        $("txtBgFile").addEventListener("change", (e) => {
+          const f = e.target.files && e.target.files[0];
+          e.target.value = "";
+          if (f) txtBgChoose(f);
+        });
+        $("txtBgClear").addEventListener("click", () => {
+          txtBgClear();
+          $("txtBg").value = "white";
+          txtCfg.bg = "white";
+          txtRender();
+        });
+        $("txtBgFit").addEventListener("change", () => {
+          txtCfg.bgFit = $("txtBgFit").value;
+          txtBgBuild();
+          txtSave();
+          txtRender();
+        });
+        let txtBgTimer = 0;
+        $("txtBgBright").addEventListener("input", () => {
+          txtCfg.bgBright = parseInt($("txtBgBright").value, 10) || 0;
+          $("txtBgBrightVal").textContent = String(txtCfg.bgBright);
+          clearTimeout(txtBgTimer);
+          txtBgTimer = setTimeout(() => {
+            txtBgBuild();
+            txtScheduleRender();
+          }, 60);
+        });
+        $("txtBgBright").addEventListener("change", txtSave);
         $("txtName").addEventListener("input", () => {
           txtCfg.name = $("txtName").value.slice(0, 24);
           txtSave();
@@ -3849,9 +4387,18 @@
       }
 
       // ── 按钮 ────────────────────────────────────────────────────
+      let busySince = 0;
       async function guarded(fn) {
+        // 兜底锁：iOS 上的蓝牙 Promise 有极小概率永远不落地。所有等待都带了
+        // 超时，正常路径最长两分钟左右；万一还是有东西卡住，至少别让页面永远
+        // 停在"按钮全灰、点了没反应"——超时后强制复位界面。
+        if (busy && Date.now() - busySince > 240000) {
+          log("上一次操作疑似卡死，强制复位界面", "bad");
+          busy = false;
+        }
         if (busy) return;
         busy = true;
+        busySince = Date.now();
         setConnected(connected);
         try {
           await fn();
@@ -3895,11 +4442,19 @@
       $("btnSelfTest").addEventListener("click", () => guarded(selfTest));
       calInit();
 
-      const PAGE_VER = "2026-11-15c"; // 每次改本页都改这里：用来确认浏览器加载的不是缓存旧版
+      const PAGE_VER = "2026-11-24c"; // 每次改本页都改这里：用来确认浏览器加载的不是缓存旧版
       log(
         "页面就绪 v" +
           PAGE_VER +
           "。蓝牙连接（手机/电脑）或串口连接（电脑 Chrome/Edge）→ 上传页选图转四色并显示，日历页生成并下发日历，文字页排版文字与 SVG，图库页管理已传图片，调试页看日志。",
+      );
+      // 出问题时截这两行就能判断是哪个壳（Bluefy / WebBLE / Chrome）
+      log("浏览器：" + navigator.userAgent, "dim");
+      log(
+        navigator.bluetooth
+          ? "✓ navigator.bluetooth 可用"
+          : "✗ 当前页面没有 navigator.bluetooth：iOS 必须用 Bluefy，且地址必须是 https://",
+        navigator.bluetooth ? "dim" : "bad",
       );
       log(
         "本地试跑：在本目录执行 python -m http.server 8000，然后开 http://localhost:8000/ble_test.html",

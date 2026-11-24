@@ -49,6 +49,44 @@ static NimBLECharacteristic *statChar = nullptr;
 
 static portMUX_TYPE pendingMux = portMUX_INITIALIZER_UNLOCKED;
 
+// ── 回调日志（延迟到主循环打印）────────────────────────────
+// GATT 回调跑在 NimBLE 主机任务里，这里绝不能直接 Serial.printf：USB-CDC 在
+// "端口打开但没人读"时（电池供电、USB 没插，正是手机连它时的常态）写入会自旋
+// 阻塞。一旦卡在主机任务里，MTU 交换、服务发现、通知全部停摆——上位机看到的
+// 就是"设备出现在列表里、点连接之后没有任何反应"。所以回调只置标志，真正
+// 打印交给主循环（bleModeLoop → flushBleEvents）。
+static volatile bool evConnected = false;
+static volatile bool evDisconnected = false;
+static volatile int evMtu = -1;  // >=0 表示本次 MTU 协商结果待打印
+static volatile int evSub = -1;  // >=0 表示通知订阅状态变化待打印
+
+static void flushBleEvents()
+{
+    if (evConnected)
+    {
+        evConnected = false;
+        Serial.printf("[BLE] connected  handle=%u  mtu=%u\n",
+                      (unsigned)clientConnHandle, connMtu);
+    }
+    if (evMtu >= 0)
+    {
+        Serial.printf("[BLE] MTU negotiated %d (单包有效载荷 %d 字节)\n",
+                      evMtu, evMtu - 3);
+        evMtu = -1;
+    }
+    if (evSub >= 0)
+    {
+        // 上位机卡在服务发现/订阅阶段时，看这一行就能分清是谁的问题
+        Serial.printf("[BLE] notify subscription %s\n", evSub ? "enabled" : "disabled");
+        evSub = -1;
+    }
+    if (evDisconnected)
+    {
+        evDisconnected = false;
+        Serial.println("[BLE] disconnected");
+    }
+}
+
 // ── 回包队列（主机任务 / 主循环 → 主循环泵出）───────────────
 // 4 槽。原先是单槽覆盖式，只论证了 ack 能合并——但 display:done、end:ok、
 // pong 这类独立回包挤在同一个泵间隔里会互相覆盖，页面只能干等超时。
@@ -383,7 +421,8 @@ class ServerCB : public NimBLEServerCallbacks
         // 空口占用时间大约减半，list 分片和上传都受益，请求失败无害。
         server->setDataLen(desc->conn_handle, 251);
 
-        Serial.printf("[BLE] connected  handle=%d  mtu=%u\n", desc->conn_handle, connMtu);
+        // 只置标志，不在主机任务里打印（见 flushBleEvents 的注释）
+        evConnected = true;
     }
 
     void onDisconnect(NimBLEServer *server) override
@@ -408,14 +447,14 @@ class ServerCB : public NimBLEServerCallbacks
 
         // 重启广播由框架接管（advertiseOnDisconnect 默认 true，本回调返回后
         // 自动开播），这里不再手动 startAdvertising()。
-        Serial.println("[BLE] disconnected");
+        evDisconnected = true; // 同上：打印交给主循环
     }
 
     void onMTUChange(uint16_t mtu, ble_gap_conn_desc *desc) override
     {
         (void)desc;
         connMtu = mtu;
-        Serial.printf("[BLE] MTU negotiated %u (单包有效载荷 %u 字节)\n", mtu, mtu - 3);
+        evMtu = (int)mtu; // 同上：打印交给主循环
     }
 
 private:
@@ -424,6 +463,20 @@ private:
         portENTER_CRITICAL(&replyMux);
         replyTail = replyHead;
         portEXIT_CRITICAL(&replyMux);
+    }
+};
+
+// 状态特征的订阅回调：只用来在串口里留一行"手机到底订上了没有"。
+// 排查"连上但页面没反应"时，这行是分界线——有 enabled 说明主机任务活着、
+// 通知通道通了，问题在浏览器侧；没有则说明根本没走到订阅。
+class StatCB : public NimBLECharacteristicCallbacks
+{
+    void onSubscribe(NimBLECharacteristic *ch, ble_gap_conn_desc *desc,
+                     uint16_t subValue) override
+    {
+        (void)ch;
+        (void)desc;
+        evSub = (subValue != 0) ? 1 : 0; // 打印交给主循环，见 flushBleEvents
     }
 };
 
@@ -567,6 +620,7 @@ bool bleModeStart()
     dataChar->setCallbacks(new DataCB());
 
     statChar = svc->createCharacteristic(STAT_UUID, NIMBLE_PROPERTY::NOTIFY);
+    statChar->setCallbacks(new StatCB());
 
     svc->start();
 
@@ -770,6 +824,7 @@ static void advWatchdog()
 
 void bleModeLoop()
 {
+    flushBleEvents(); // 回调期攒下的连接/MTU/订阅事件在这里打印
     advWatchdog();
     // 先落盘 + 执行文件类命令（end 的回包必须排在实际落盘之后），
     // 再把回包发出去（含 display:queued / clear:queued），最后执行刷屏
